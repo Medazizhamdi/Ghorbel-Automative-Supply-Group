@@ -6,10 +6,10 @@ import { PrismaClient, DataStatus, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import nodemailer from 'nodemailer';
 import path from 'node:path';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { supplierInvoiceLines, supplierOrderScope, supplierPurchaseTotals } from './supplier-order.logic.js';
+import { createEmailDelivery } from './email-delivery.js';
 
 // Local development keeps .env at the monorepo root; Render injects env vars.
 try {
@@ -39,14 +39,7 @@ const decryptEmailSecret = (value: string) => {
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64url')), decipher.final()]).toString('utf8');
 };
-const emailTransport = process.env.SMTP_HOST && process.env.SMTP_FROM ? nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT ?? 587),
-  secure: process.env.SMTP_SECURE === 'true',
-  ...(process.env.SMTP_USER ? { auth: { user: process.env.SMTP_USER, pass: (process.env.SMTP_PASSWORD ?? '').replace(/\s/g, '') } } : {}),
-  connectionTimeout: 10_000,
-  socketTimeout: 20_000,
-}) : null;
+const emailDelivery = createEmailDelivery();
 
 const enqueueNotification = async (tx: Prisma.TransactionClient, input: { userId: string | null; emailTo: string; eventKey: string; title: string; message: string; link?: string; emailSecretEncrypted?: string }) => tx.notification.upsert({
   where: { eventKey: input.eventKey },
@@ -58,7 +51,7 @@ const enqueueNotification = async (tx: Prisma.TransactionClient, input: { userId
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 let emailWorkerBusy = false;
 const deliverEmailOutbox = async () => {
-  if (!emailTransport || emailWorkerBusy) return;
+  if (!emailDelivery.enabled || emailWorkerBusy) return;
   emailWorkerBusy = true;
   const now = new Date();
   try {
@@ -76,7 +69,7 @@ const deliverEmailOutbox = async () => {
         const secretHtml = emailSecret ? `<p style="padding:14px;background:#eef5ff;border-radius:8px"><strong>Code privé de suivi (valable 30 jours)</strong><br><code>${escapeHtml(emailSecret)}</code><br>Conservez-le avec votre numéro de commande.</p>` : '';
         let orderSummaryText = '';
         let orderSummaryHtml = '';
-        let attachments: NonNullable<Parameters<typeof emailTransport.sendMail>[0]['attachments']> = [];
+        let attachments: { filename: string; content: Buffer; contentType: string }[] = [];
         const orderEmailMatch = /^order\.created\.(?:customer|guest):([0-9a-f-]{36})$/i.exec(item.eventKey);
         if (orderEmailMatch) {
           const order = await prisma.order.findUnique({
@@ -92,12 +85,12 @@ const deliverEmailOutbox = async () => {
           attachments = [{ filename: `${order.invoiceNumber}.pdf`, content: Buffer.from(order.invoicePdf), contentType: 'application/pdf' }];
         }
         const html = `<div style="font-family:Arial,sans-serif;color:#18304c;max-width:700px;margin:auto"><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message)}</p>${orderSummaryHtml}${secretHtml}${href ? `<p><a href="${escapeHtml(href)}" style="color:#1263dc">Ouvrir mon espace Ghorbel Automative Supply Group</a></p>` : ''}<hr><small>Ghorbel Automative Supply Group</small></div>`;
-        await emailTransport.sendMail({ from: process.env.SMTP_FROM!, to: item.emailTo, subject: item.title, text: `${item.message}${orderSummaryText}${secretText}${href ? `\n\n${href}` : ''}`, html, attachments, messageId: `<${createHash('sha256').update(item.eventKey).digest('hex')}@autopieces360>` });
+        await emailDelivery.send({ to: item.emailTo, subject: item.title, text: `${item.message}${orderSummaryText}${secretText}${href ? `\n\n${href}` : ''}`, html, attachments, messageId: `<${createHash('sha256').update(item.eventKey).digest('hex')}@autopieces360>` });
         await prisma.notification.update({ where: { id: item.id }, data: { emailStatus: 'SENT', emailSentAt: new Date(), emailLockedAt: null, emailLastError: null, emailSecretEncrypted: null } });
       } catch (error) {
         const failed = attempt >= 5;
         const backoffMs = Math.min(60 * 60_000, 15_000 * (2 ** (attempt - 1)));
-        const message = error instanceof Error ? error.message.slice(0, 1000) : 'Échec SMTP inconnu.';
+        const message = error instanceof Error ? error.message.slice(0, 1000) : 'Échec de livraison e-mail inconnu.';
         await prisma.notification.update({ where: { id: item.id }, data: { emailStatus: failed ? 'FAILED' : 'QUEUED', emailLockedAt: null, emailNextAttemptAt: new Date(Date.now() + backoffMs), emailLastError: message } });
         console.error(JSON.stringify({ event: 'email_delivery_failed', notificationId: item.id, attempt, final: failed, error: message }));
       }
@@ -3524,11 +3517,11 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const server = app.listen(port, () => console.log(JSON.stringify({ level: 'info', message: 'API listening', port })));
-if (!emailTransport) console.log(JSON.stringify({ level: 'info', message: 'SMTP absent; les notifications restent disponibles dans l’application et les emails demeurent en attente.', emailDelivery: 'disabled' }));
+if (!emailDelivery.enabled) console.log(JSON.stringify({ level: 'info', message: 'Service e-mail absent ou incomplet; les notifications restent disponibles dans l’application et les emails demeurent en attente.', emailDelivery: 'disabled', provider: emailDelivery.provider }));
 const emailWorkerTimer = setInterval(() => { void deliverEmailOutbox(); }, 15_000);
 emailWorkerTimer.unref();
-if (emailTransport) void deliverEmailOutbox();
-const shutdown = async () => { clearInterval(emailWorkerTimer); server.close(); emailTransport?.close(); await prisma.$disconnect(); process.exit(0); };
+if (emailDelivery.enabled) void deliverEmailOutbox();
+const shutdown = async () => { clearInterval(emailWorkerTimer); server.close(); emailDelivery.close(); await prisma.$disconnect(); process.exit(0); };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 

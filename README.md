@@ -46,7 +46,13 @@ npm run dev
 
 L'interface est servie sur `http://localhost:5174`, l'API sur `http://localhost:10001` et Swagger sur `http://localhost:10001/api/docs`. Les routes de catalogue restent vides jusqu'à l'import de données automobiles vérifiées; le seed ne crée que quelques noms de marques identifiés comme démonstration.
 
-Pour activer les emails, renseigner `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` et `SMTP_FROM` dans l'environnement de l'API. Le port 587 s'utilise généralement avec `SMTP_SECURE=false` (STARTTLS) et le port 465 avec `SMTP_SECURE=true` (TLS). Utiliser le mot de passe SMTP ou mot de passe d'application fourni par le prestataire. À la création d'une commande, l'adresse e-mail du client reçoit sa confirmation, le détail des articles et totaux, ainsi que la facture PDF générée pour cette commande en pièce jointe ; cette pièce jointe est chargée depuis la facture enregistrée, y compris lors d'une nouvelle tentative d'envoi. Sans SMTP, les emails restent en attente et seront expédiés après configuration puis redémarrage de l'API. Définir aussi une valeur stable et aléatoire pour `GUEST_TOKEN_ENCRYPTION_KEY` afin que les codes invités chiffrés en attente puissent être envoyés après un redémarrage.
+Les e-mails de commande utilisent une file durable avec reprises automatiques. Le message client inclut le résumé de commande et la facture PDF en pièce jointe.
+
+Pour les services Render payants ou un autre hébergeur qui autorise SMTP, configurer `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` et `SMTP_FROM`. Le port 587 utilise habituellement `SMTP_SECURE=false` (STARTTLS); le port 465 utilise `SMTP_SECURE=true` (TLS).
+
+Pour Render Free, configurer l'envoi Gmail API sur HTTPS avec `EMAIL_PROVIDER=gmail-api`, `EMAIL_FROM`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` et `GMAIL_REFRESH_TOKEN`. Activer l'API Gmail dans Google Cloud, configurer l'écran de consentement OAuth et autoriser le scope `https://www.googleapis.com/auth/gmail.send`. Les identifiants OAuth et le jeton restent uniquement dans les variables secrètes Render. Un OAuth externe laissé en mode « Testing » émet des refresh tokens qui expirent après 7 jours; passer l'application en production et suivre les exigences de vérification Google pour un usage durable. Voir la [documentation Gmail sur les scopes](https://developers.google.com/workspace/gmail/api/auth/scopes) et la [durée de vie des refresh tokens OAuth](https://developers.google.com/identity/protocols/oauth2/).
+
+Sans configuration d'envoi valide, les e-mails restent dans la file et seront expédiés après configuration puis redémarrage de l'API. Définir aussi une valeur stable et aléatoire pour `GUEST_TOKEN_ENCRYPTION_KEY` afin que les codes invités chiffrés en attente puissent être envoyés après un redémarrage.
 
 ## Déploiement
 
@@ -54,12 +60,12 @@ Pour activer les emails, renseigner `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SM
 
 Le Blueprint `render.yaml` déploie l'API Node sur Render Free et demande `DATABASE_URL` pour la base Neon. Créer le projet PostgreSQL dans Neon, copier sa chaîne de connexion **directe** (pas le hostname `-pooler`) et la saisir comme `DATABASE_URL` lors de la configuration Render. Cette URL est requise au démarrage pour les migrations Prisma.
 
-Cette combinaison convient à une démo, pas à une boutique en production : l'API Render s'endort après 15 minutes sans trafic et son disque est éphémère (photos perdues aux redémarrages/redéploiements). Le PostgreSQL Neon Free a des quotas de stockage, calcul et transfert, et son calcul s'endort après inactivité. Render bloque le SMTP sortant sur les ports 25, 465 et 587; les emails Gmail SMTP ne fonctionneront donc pas depuis ce service gratuit. Pour une utilisation réelle, il faudra un stockage d'images externe et un fournisseur d'e-mails par API HTTP.
+Cette combinaison convient à une démo, pas à une boutique en production : l'API Render s'endort après 15 minutes sans trafic et son disque est éphémère (photos perdues aux redémarrages/redéploiements). Le PostgreSQL Neon Free a des quotas de stockage, calcul et transfert, et son calcul s'endort après inactivité. Render bloque le SMTP sortant sur les ports 25, 465 et 587; l'intégration Gmail API utilise HTTPS et évite cette restriction.
 
 1. Créer un projet PostgreSQL dans Neon et copier l'URL directe de connexion.
 2. Créer un Blueprint Render depuis ce dépôt et appliquer `render.yaml` (Web Service Node gratuit). Entrer la valeur Neon dans `DATABASE_URL`; les migrations Prisma s'exécutent au démarrage du service.
 3. Dans le service API, régler `WEB_ORIGIN` sur l'origine exacte du site Vercel, sans chemin (ex. `https://autopieces360.vercel.app`). Pour plusieurs origines, séparer par virgules. Render génère `JWT_SECRET`, `GUEST_TOKEN_ENCRYPTION_KEY` et `ADMIN_BOOTSTRAP_KEY`; gardez la dernière secrète et retirez-la après création de l'administrateur initial.
-4. Pour les confirmations de commande par e-mail, ajouter au service Render `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` et `SMTP_FROM` avec les identifiants SMTP. Ces valeurs restent exclusivement côté serveur.
+4. Pour les confirmations par Gmail API, renseigner `EMAIL_PROVIDER=gmail-api`, `EMAIL_FROM=Ghorbel Automative Supply Group <ghorbelautomotivesupplygroup@gmail.com>`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` et `GMAIL_REFRESH_TOKEN` dans les variables du service API. Ne jamais placer ces identifiants dans Vercel ou dans une variable `VITE_*`.
 5. Vérifier `https://<api-render>/api/health` et `https://<api-render>/api/docs`.
 
 ### Vercel (frontend)
