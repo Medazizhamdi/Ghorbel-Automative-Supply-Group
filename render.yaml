@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: autopieces360-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci && npm run prisma:generate --workspace apps/api && npm run build --workspace apps/api
+    preDeployCommand: npm run prisma:migrate --workspace apps/api
+    startCommand: npm run start --workspace apps/api
+    healthCheckPath: /api/health
+    disk:
+      name: autopieces360-uploads
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: DATABASE_URL
+        fromDatabase:
+          name: autopieces360-db
+          property: connectionString
+      - key: WEB_ORIGIN
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GUEST_TOKEN_ENCRYPTION_KEY
+        generateValue: true
+      - key: ADMIN_BOOTSTRAP_KEY
+        generateValue: true
+databases:
+  - name: autopieces360-db
+    databaseName: autopieces360
+    user: autopieces360
+    plan: basic-256mb
+    region: frankfurt

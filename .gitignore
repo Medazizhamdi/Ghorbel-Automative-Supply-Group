@@ -1,0 +1,12 @@
+node_modules/
+apps/*/node_modules/
+apps/api/dist/
+apps/web/dist/
+.env*
+!.env.example
+coverage/
+.vercel/
+*.log
+*.tsbuildinfo
+
+apps/api/uploads/

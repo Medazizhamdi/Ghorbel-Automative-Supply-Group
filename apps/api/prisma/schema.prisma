@@ -1,0 +1,760 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DataStatus {
+  DEMONSTRATION
+  VERIFIED
+  CONTRIBUTED
+}
+
+enum ProductPricingMode {
+  MANUAL
+  MARGIN
+}
+
+enum ReferenceType {
+  OEM
+  ALTERNATIVE
+}
+
+enum UserRole {
+  ADMIN
+  SUPPLIER
+  RESELLER
+  CUSTOMER
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum SupplierLegalProfileStatus {
+  PENDING
+  APPROVED
+  REVIEW_REQUIRED
+}
+
+enum ImportStatus {
+  PREVIEWED
+  COMPLETED
+}
+
+enum SupplierOfferStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum FitmentSuggestionStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum StockMovementType {
+  RECEIPT
+  ADJUSTMENT
+  RESERVATION
+  RELEASE
+  DAMAGE
+  TRANSFER_IN
+  TRANSFER_OUT
+  SHIPMENT
+}
+
+enum OrderStatus {
+  PLACED
+  PROCESSING
+  PARTIALLY_SHIPPED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum OrderLineStatus {
+  RESERVED
+  ACCEPTED
+  PREPARING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH_ON_DELIVERY
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  UNPAID
+  TRANSFER_SUBMITTED
+  PAID
+}
+
+enum NotificationEmailStatus {
+  QUEUED
+  PROCESSING
+  SENT
+  FAILED
+}
+
+enum SupplierInvoiceStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum PartnerConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum SupplierInvoiceEventType {
+  UPLOADED
+  RESUBMITTED
+  ACCEPTED
+  REJECTED
+}
+
+model User {
+  id                       String                 @id @default(uuid()) @db.Uuid
+  email                    String                 @unique
+  phone                    String?
+  passwordHash             String
+  firstName                String
+  lastName                 String
+  role                     UserRole               @default(CUSTOMER)
+  status                   AccountStatus          @default(PENDING)
+  companyName              String?
+  legalName                String?
+  tradeName                String?
+  businessAddress          String?
+  businessCity             String?
+  postalCode               String?
+  taxIdentifier            String?
+  commercialRegisterNumber String?
+  legalProfileStatus       SupplierLegalProfileStatus @default(PENDING)
+  pricingProfileId         String?                @db.Uuid
+  pricingProfile           PricingProfile?        @relation(fields: [pricingProfileId], references: [id], onDelete: SetNull)
+  imports                  ImportJob[]
+  supplierOffers           SupplierOffer[]
+  warehouses               Warehouse[]
+  stockMovements           StockMovement[]
+  customerOrders           Order[]
+  deliveryAddresses        CustomerAddress[]
+  paymentEvents            PaymentEvent[]
+  paymentProofUploads      PaymentProof[]         @relation("PaymentProofUploader")
+  notifications            Notification[]
+  supplierInvoices         SupplierInvoice[]      @relation("SupplierInvoiceOwner")
+  reviewedSupplierInvoices SupplierInvoice[]      @relation("SupplierInvoiceReviewer")
+  supplierInvoiceEvents    SupplierInvoiceEvent[] @relation("SupplierInvoiceEventActor")
+  auditLogs                AuditLog[]             @relation("AuditLogActor")
+  companySettingsUpdates   CompanySettings[]      @relation("CompanySettingsUpdater")
+  partnerConversations     PartnerConversation[]  @relation("PartnerConversationSupplier")
+  partnerMessages          PartnerConversationMessage[] @relation("PartnerMessageSender")
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@index([role, status])
+  @@index([pricingProfileId])
+}
+
+model CustomerAddress {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         String   @db.VarChar(80)
+  recipientName String   @db.VarChar(160)
+  phone         String   @db.VarChar(24)
+  address       String   @db.VarChar(300)
+  city          String   @db.VarChar(100)
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, isDefault, createdAt])
+}
+
+model PricingProfile {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String   @unique
+  description     String?
+  discountPercent Decimal  @default(0) @db.Decimal(5, 2)
+  active          Boolean  @default(true)
+  users           User[]
+  productPrices   ProfileProductPrice[]
+  categoryPrices  ProfileCategoryPrice[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ProfileProductPrice {
+  id                String         @id @default(uuid()) @db.Uuid
+  profileId         String         @db.Uuid
+  profile           PricingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  productId         String         @db.Uuid
+  product           Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  discountPercent   Decimal        @db.Decimal(5, 2)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@unique([profileId, productId])
+  @@index([productId])
+}
+
+model ProfileCategoryPrice {
+  id              String         @id @default(uuid()) @db.Uuid
+  profileId       String         @db.Uuid
+  profile         PricingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  category        String         @db.VarChar(100)
+  discountPercent Decimal        @db.Decimal(5, 2)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([profileId, category])
+  @@index([category])
+}
+
+model ImportJob {
+  id           String       @id @default(uuid()) @db.Uuid
+  uploadedById String?      @db.Uuid
+  uploadedBy   User?        @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  fileName     String
+  rawCsv       String       @db.Text
+  status       ImportStatus @default(PREVIEWED)
+  rowCount     Int
+  acceptedRows Int          @default(0)
+  rejectedRows Int          @default(0)
+  report       Json?
+  createdAt    DateTime     @default(now())
+  completedAt  DateTime?
+
+  @@index([uploadedById, createdAt])
+  @@index([status, createdAt])
+}
+
+model VehicleMake {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String         @unique
+  slug      String         @unique
+  source    String?
+  sourceReference String?
+  status    DataStatus     @default(DEMONSTRATION)
+  models    VehicleModel[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model VehicleModel {
+  id          String              @id @default(uuid()) @db.Uuid
+  makeId      String              @db.Uuid
+  make        VehicleMake         @relation(fields: [makeId], references: [id], onDelete: Restrict)
+  name        String
+  slug        String
+  category    String?             @db.VarChar(50)
+  source      String?
+  sourceReference String?
+  status      DataStatus          @default(DEMONSTRATION)
+  generations VehicleGeneration[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([makeId, slug])
+  @@index([makeId, name])
+}
+
+model VehicleGeneration {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  modelId                   String                     @db.Uuid
+  model                     VehicleModel               @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  name                      String
+  yearFrom                  Int
+  yearTo                    Int?
+  source                    String?
+  sourceReference           String?
+  status                    DataStatus                 @default(DEMONSTRATION)
+  engines                   Engine[]
+  variants                  VehicleVariant[]
+  compatibilities           VehicleCompatibility[]
+  partnerFitmentSuggestions PartnerFitmentSuggestion[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@index([modelId, yearFrom, yearTo])
+}
+
+model Engine {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  generationId              String                     @db.Uuid
+  generation                VehicleGeneration          @relation(fields: [generationId], references: [id], onDelete: Restrict)
+  name                      String
+  fuel                      String?
+  displacementCc            Int?
+  powerKw                   Int?
+  engineCode                String?
+  source                    String?
+  sourceReference           String?
+  status                    DataStatus                 @default(DEMONSTRATION)
+  variants                  VehicleVariant[]
+  compatibilities           VehicleCompatibility[]
+  partnerFitmentSuggestions PartnerFitmentSuggestion[]
+
+  @@index([generationId, name])
+  @@index([engineCode])
+}
+
+model VehicleVariant {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  generationId              String                     @db.Uuid
+  generation                VehicleGeneration          @relation(fields: [generationId], references: [id], onDelete: Restrict)
+  engineId                  String?                    @db.Uuid
+  engine                    Engine?                    @relation(fields: [engineId], references: [id], onDelete: Restrict)
+  name                      String
+  bodyStyle                 String?
+  transmission              String?
+  drivetrain                String?
+  source                    String?
+  sourceReference           String?
+  status                    DataStatus                 @default(DEMONSTRATION)
+  compatibilities           VehicleCompatibility[]
+  partnerFitmentSuggestions PartnerFitmentSuggestion[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@index([generationId, name])
+  @@index([engineId])
+}
+
+model Product {
+  id              String                 @id @default(uuid()) @db.Uuid
+  sku             String                 @unique
+  name            String
+  description     String?
+  category        String?
+  pieceBrand      String?
+  images          String[]               @default([])
+  status          DataStatus             @default(DEMONSTRATION)
+  listPrice       Decimal?               @db.Decimal(12, 3)
+  pricingMode     ProductPricingMode     @default(MANUAL)
+  marginPercent   Decimal?               @db.Decimal(6, 2)
+  vatRate         Decimal                @default(19) @db.Decimal(5, 2)
+  archivedAt      DateTime?
+  references      ProductReference[]
+  compatibilities VehicleCompatibility[]
+  supplierOffers  SupplierOffer[]
+  profilePrices   ProfileProductPrice[]
+  orderLines      OrderLine[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@index([name])
+  @@index([category])
+}
+
+model SupplierOffer {
+  id                 String                     @id @default(uuid()) @db.Uuid
+  supplierId         String?                    @db.Uuid
+  supplier           User?                      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  productId          String                     @db.Uuid
+  product            Product                    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  supplierSku        String
+  purchasePrice      Decimal                    @db.Decimal(12, 3)
+  pendingPurchasePrice Decimal?                   @db.Decimal(12, 3)
+  purchaseVatRate    Decimal                    @default(19) @db.Decimal(5, 2)
+  currency           String                     @default("TND")
+  status             SupplierOfferStatus        @default(PENDING)
+  archivedAt         DateTime?
+  stockItems         StockItem[]
+  stockMovements     StockMovement[]
+  orderLines         OrderLine[]
+  fitmentSuggestions PartnerFitmentSuggestion[]
+  conversations      PartnerConversation[]
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@unique([supplierId, supplierSku])
+  @@index([supplierId, status, createdAt])
+  @@index([productId, status])
+}
+
+model PartnerFitmentSuggestion {
+  id              String                  @id @default(uuid()) @db.Uuid
+  offerId         String                  @db.Uuid
+  offer           SupplierOffer           @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  generationId    String?                 @db.Uuid
+  generation      VehicleGeneration?      @relation(fields: [generationId], references: [id], onDelete: Restrict)
+  engineId        String?                 @db.Uuid
+  engine          Engine?                 @relation(fields: [engineId], references: [id], onDelete: Restrict)
+  variantId       String?                 @db.Uuid
+  variant         VehicleVariant?         @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  year            Int
+  yearTo          Int?
+  makeName        String?
+  modelName       String?
+  generationName  String?
+  vehicleCategory String?
+  engineName      String?
+  engineCode      String?
+  fuel            String?
+  displacementCc  Int?
+  powerKw         Int?
+  variantName     String?
+  bodyStyle       String?
+  transmission    String?
+  drivetrain      String?
+  status          FitmentSuggestionStatus @default(PENDING)
+  source          String?
+  sourceReference String?
+  reviewedAt      DateTime?
+  createdAt       DateTime                @default(now())
+
+  @@unique([offerId, generationId, engineId, variantId, year])
+  @@index([status, createdAt])
+}
+
+model Warehouse {
+  id         String          @id @default(uuid()) @db.Uuid
+  ownerId    String?         @db.Uuid
+  owner      User?           @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  code       String
+  name       String
+  city       String?
+  stockItems StockItem[]
+  movements  StockMovement[]
+  orderLines OrderLine[]
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@unique([code])
+  @@index([ownerId, name])
+}
+
+model StockItem {
+  id          String          @id @default(uuid()) @db.Uuid
+  warehouseId String          @db.Uuid
+  warehouse   Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  offerId     String          @db.Uuid
+  offer       SupplierOffer   @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  onHand      Int             @default(0)
+  reserved    Int             @default(0)
+  onOrder     Int             @default(0)
+  damaged     Int             @default(0)
+  minimumStock Int            @default(0)
+  updatedAt   DateTime        @updatedAt
+  movements   StockMovement[]
+  orderLines  OrderLine[]
+
+  @@unique([warehouseId, offerId])
+  @@index([offerId])
+}
+
+model StockMovement {
+  id          String            @id @default(uuid()) @db.Uuid
+  stockItemId String            @db.Uuid
+  stockItem   StockItem         @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+  warehouseId String            @db.Uuid
+  warehouse   Warehouse         @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  offerId     String            @db.Uuid
+  offer       SupplierOffer     @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  type        StockMovementType
+  quantity    Int
+  reason      String
+  actorId     String            @db.Uuid
+  actor       User              @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  createdAt   DateTime          @default(now())
+
+  @@index([warehouseId, createdAt])
+  @@index([offerId, createdAt])
+}
+
+model Order {
+  id                   String            @id @default(uuid()) @db.Uuid
+  orderNumber          String            @unique
+  invoiceNumber        String?           @unique @db.VarChar(80)
+  invoiceIssuedAt      DateTime?
+  invoicePdf           Bytes?            @db.ByteA
+  customerId           String?           @db.Uuid
+  customer             User?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  guestEmail           String?           @db.VarChar(254)
+  guestAccessTokenHash String?           @unique @db.VarChar(64)
+  guestAccessExpiresAt DateTime?
+  status               OrderStatus       @default(PLACED)
+  currency             String            @default("TND")
+  paymentMethod        PaymentMethod     @default(CASH_ON_DELIVERY)
+  paymentStatus        PaymentStatus     @default(UNPAID)
+  transferReference    String?
+  paymentConfirmedAt   DateTime?
+  deliveryName         String            @db.VarChar(160)
+  deliveryPhone        String            @db.VarChar(24)
+  deliveryAddress      String            @db.VarChar(300)
+  deliveryCity         String            @db.VarChar(100)
+  subtotalExclTax      Decimal           @db.Decimal(12, 3)
+  vatTotal             Decimal           @db.Decimal(12, 3)
+  totalInclTax         Decimal           @db.Decimal(12, 3)
+  customerNote         String?           @db.VarChar(1000)
+  lines                OrderLine[]
+  paymentEvents        PaymentEvent[]
+  paymentProofs        PaymentProof[]
+  supplierInvoices     SupplierInvoice[]
+  partnerConversations PartnerConversation[]
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@index([customerId, createdAt])
+  @@index([guestEmail, createdAt])
+  @@index([status, createdAt])
+}
+
+model OrderLine {
+  id                               String          @id @default(uuid()) @db.Uuid
+  orderId                          String          @db.Uuid
+  order                            Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  productId                        String?         @db.Uuid
+  product                          Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  supplierOfferId                  String?         @db.Uuid
+  supplierOffer                    SupplierOffer?  @relation(fields: [supplierOfferId], references: [id], onDelete: SetNull)
+  warehouseId                      String?         @db.Uuid
+  warehouse                        Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  stockItemId                      String?         @db.Uuid
+  stockItem                        StockItem?      @relation(fields: [stockItemId], references: [id], onDelete: SetNull)
+  quantity                         Int
+  status                           OrderLineStatus @default(RESERVED)
+  productSkuSnapshot               String
+  productNameSnapshot              String
+  supplierSkuSnapshot              String
+  carrierName                      String?         @db.VarChar(80)
+  trackingReference                String?         @db.VarChar(120)
+  trackingUrl                      String?         @db.VarChar(500)
+  unitPriceExclTax                 Decimal         @db.Decimal(12, 3)
+  purchaseUnitPriceExclTaxSnapshot Decimal?        @db.Decimal(12, 3)
+  purchaseVatRateSnapshot          Decimal?        @db.Decimal(5, 2)
+  vatRateSnapshot                  Decimal         @db.Decimal(5, 2)
+  discountPercent                  Decimal         @db.Decimal(5, 2)
+  unitPriceInclTax                 Decimal         @db.Decimal(12, 3)
+  lineSubtotalExclTax              Decimal         @db.Decimal(12, 3)
+  lineVat                          Decimal         @db.Decimal(12, 3)
+  lineTotalInclTax                 Decimal         @db.Decimal(12, 3)
+  createdAt                        DateTime        @default(now())
+  updatedAt                        DateTime        @updatedAt
+
+  @@index([orderId])
+  @@index([supplierOfferId, status, createdAt])
+  @@index([warehouseId, createdAt])
+  @@index([stockItemId])
+}
+
+model PartnerConversation {
+  id             String                   @id @default(uuid()) @db.Uuid
+  supplierId     String                   @db.Uuid
+  supplier       User                     @relation("PartnerConversationSupplier", fields: [supplierId], references: [id], onDelete: Cascade)
+  subject        String                   @db.VarChar(180)
+  status         PartnerConversationStatus @default(OPEN)
+  relatedOrderId String?                  @db.Uuid
+  relatedOrder   Order?                   @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
+  relatedOfferId String?                  @db.Uuid
+  relatedOffer   SupplierOffer?           @relation(fields: [relatedOfferId], references: [id], onDelete: SetNull)
+  messages       PartnerConversationMessage[]
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([supplierId, status, updatedAt])
+  @@index([relatedOrderId])
+  @@index([relatedOfferId])
+}
+
+model PartnerConversationMessage {
+  id                String             @id @default(uuid()) @db.Uuid
+  conversationId    String             @db.Uuid
+  conversation      PartnerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId          String             @db.Uuid
+  sender            User               @relation("PartnerMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  body              String             @db.VarChar(5000)
+  attachmentName    String?            @db.VarChar(255)
+  attachmentMimeType String?           @db.VarChar(100)
+  attachmentBytes   Bytes?             @db.ByteA
+  readAt            DateTime?
+  createdAt         DateTime           @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([senderId, readAt])
+}
+
+model PaymentEvent {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderId           String        @db.Uuid
+  order             Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  actorId           String        @db.Uuid
+  actor             User          @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  fromStatus        PaymentStatus
+  toStatus          PaymentStatus
+  transferReference String?
+  note              String?       @db.VarChar(500)
+  createdAt         DateTime      @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+model PaymentProof {
+  id           String   @id @default(uuid()) @db.Uuid
+  orderId      String   @db.Uuid
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  uploadedById String?  @db.Uuid
+  uploadedBy   User?    @relation("PaymentProofUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  fileName     String   @db.VarChar(160)
+  mimeType     String   @db.VarChar(80)
+  fileSize     Int
+  sha256       String   @db.VarChar(64)
+  fileContent  Bytes    @db.ByteA
+  createdAt    DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([uploadedById, createdAt])
+}
+
+model SupplierInvoice {
+  id            String                 @id @default(uuid()) @db.Uuid
+  supplierId    String                 @db.Uuid
+  supplier      User                   @relation("SupplierInvoiceOwner", fields: [supplierId], references: [id], onDelete: Restrict)
+  events        SupplierInvoiceEvent[]
+  orderId       String                 @db.Uuid
+  order         Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  invoiceNumber String                 @db.VarChar(100)
+  fileName      String                 @db.VarChar(140)
+  mimeType      String                 @default("application/pdf") @db.VarChar(80)
+  fileContent   Bytes                  @db.ByteA
+  status        SupplierInvoiceStatus  @default(PENDING)
+  reviewNote    String?                @db.VarChar(1000)
+  reviewedById  String?                @db.Uuid
+  reviewedBy    User?                  @relation("SupplierInvoiceReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  uploadedAt    DateTime               @default(now())
+  reviewedAt    DateTime?
+  updatedAt     DateTime               @updatedAt
+
+  @@unique([supplierId, orderId, invoiceNumber])
+  @@index([supplierId, status, uploadedAt])
+  @@index([orderId, uploadedAt])
+}
+
+model SupplierInvoiceEvent {
+  id        String                   @id @default(uuid()) @db.Uuid
+  invoiceId String                   @db.Uuid
+  invoice   SupplierInvoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  actorId   String                   @db.Uuid
+  actor     User                     @relation("SupplierInvoiceEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  type      SupplierInvoiceEventType
+  note      String?                  @db.VarChar(1000)
+  createdAt DateTime                 @default(now())
+
+  @@index([invoiceId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String   @db.Uuid
+  actor      User     @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: Restrict)
+  action     String   @db.VarChar(80)
+  entityType String   @db.VarChar(80)
+  entityId   String   @db.VarChar(100)
+  details    Json?    @db.JsonB
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([action, createdAt])
+}
+
+model CompanySettings {
+  id                  String   @id @default("default") @db.VarChar(40)
+  bankTransferEnabled Boolean  @default(false)
+  bankAccountHolder   String?  @db.VarChar(160)
+  bankName            String?  @db.VarChar(120)
+  bankRib             String?  @db.VarChar(64)
+  bankInstructions    String?  @db.VarChar(1000)
+  defaultMarginPercent Decimal @default(0) @db.Decimal(6, 2)
+  updatedById         String?  @db.Uuid
+  updatedBy           User?    @relation("CompanySettingsUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([updatedById])
+}
+
+model CategoryMargin {
+  id            String   @id @default(uuid()) @db.Uuid
+  category      String   @unique @db.VarChar(100)
+  marginPercent Decimal  @db.Decimal(6, 2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([category])
+}
+
+model Notification {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  userId               String?                 @db.Uuid
+  user                 User?                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventKey             String                  @unique
+  title                String                  @db.VarChar(180)
+  message              String                  @db.VarChar(1000)
+  link                 String?                 @db.VarChar(300)
+  emailTo              String                  @db.VarChar(254)
+  emailSecretEncrypted String?                 @db.VarChar(300)
+  emailStatus          NotificationEmailStatus @default(QUEUED)
+  emailAttempts        Int                     @default(0)
+  emailNextAttemptAt   DateTime                @default(now())
+  emailLockedAt        DateTime?
+  emailSentAt          DateTime?
+  emailLastError       String?                 @db.VarChar(1000)
+  readAt               DateTime?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([emailStatus, emailNextAttemptAt])
+}
+
+model ProductReference {
+  id         String        @id @default(uuid()) @db.Uuid
+  productId  String        @db.Uuid
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  value      String
+  normalized String
+  type       ReferenceType
+  source     String?
+  verifiedAt DateTime?
+
+  @@unique([normalized, productId])
+  @@index([normalized, type])
+}
+
+model VehicleCompatibility {
+  id              String            @id @default(uuid()) @db.Uuid
+  productId       String            @db.Uuid
+  product         Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  generationId    String            @db.Uuid
+  generation      VehicleGeneration @relation(fields: [generationId], references: [id], onDelete: Restrict)
+  engineId        String?           @db.Uuid
+  engine          Engine?           @relation(fields: [engineId], references: [id], onDelete: Restrict)
+  variantId       String?           @db.Uuid
+  variant         VehicleVariant?   @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  yearFrom        Int
+  yearTo          Int?
+  source          String
+  sourceReference String?
+  verifiedAt      DateTime
+  createdAt       DateTime          @default(now())
+
+  @@unique([productId, generationId, engineId, yearFrom, yearTo])
+  @@index([generationId, engineId, yearFrom, yearTo])
+  @@index([variantId, yearFrom, yearTo])
+  @@index([productId])
+}
