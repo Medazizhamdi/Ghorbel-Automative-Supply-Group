@@ -12,9 +12,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: autopieces360-db
-          property: connectionString
+        sync: false
       - key: WEB_ORIGIN
         sync: false
       - key: JWT_SECRET
@@ -23,9 +21,3 @@ services:
         generateValue: true
       - key: ADMIN_BOOTSTRAP_KEY
         generateValue: true
-databases:
-  - name: autopieces360-db
-    databaseName: autopieces360
-    user: autopieces360
-    plan: free
-    region: frankfurt

@@ -50,12 +50,14 @@ Pour activer les emails, renseigner `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SM
 
 ## Déploiement
 
-### Render gratuit (démo uniquement)
+### Render + Neon (démo gratuite)
 
-Le Blueprint `render.yaml` utilise les offres gratuites Render pour l'API et PostgreSQL. C'est adapté à une démo, pas à une boutique en production : l'API s'endort après 15 minutes sans trafic, son disque est éphémère (photos perdues aux redémarrages/redéploiements), et la base gratuite de 1 Go expire après 30 jours. Render bloque également le trafic SMTP sortant sur les ports 25, 465 et 587; les emails Gmail SMTP ne fonctionneront donc pas depuis ce service gratuit. Pour une utilisation réelle, il faudra un stockage d'images externe, un fournisseur d'e-mails par API HTTP et une base durable.
+Le Blueprint `render.yaml` déploie l'API Node sur Render Free et demande `DATABASE_URL` pour la base Neon. Créer le projet PostgreSQL dans Neon, copier sa chaîne de connexion **directe** (pas le hostname `-pooler`) et la saisir comme `DATABASE_URL` lors de la configuration Render. Cette URL est requise au démarrage pour les migrations Prisma.
 
-1. Créer un Blueprint Render depuis ce dépôt et appliquer `render.yaml` (Web Service Node gratuit + PostgreSQL gratuit).
-2. Le `DATABASE_URL` de la base est lié au service API; les migrations Prisma s'exécutent au démarrage du service.
+Cette combinaison convient à une démo, pas à une boutique en production : l'API Render s'endort après 15 minutes sans trafic et son disque est éphémère (photos perdues aux redémarrages/redéploiements). Le PostgreSQL Neon Free a des quotas de stockage, calcul et transfert, et son calcul s'endort après inactivité. Render bloque le SMTP sortant sur les ports 25, 465 et 587; les emails Gmail SMTP ne fonctionneront donc pas depuis ce service gratuit. Pour une utilisation réelle, il faudra un stockage d'images externe et un fournisseur d'e-mails par API HTTP.
+
+1. Créer un projet PostgreSQL dans Neon et copier l'URL directe de connexion.
+2. Créer un Blueprint Render depuis ce dépôt et appliquer `render.yaml` (Web Service Node gratuit). Entrer la valeur Neon dans `DATABASE_URL`; les migrations Prisma s'exécutent au démarrage du service.
 3. Dans le service API, régler `WEB_ORIGIN` sur l'origine exacte du site Vercel, sans chemin (ex. `https://autopieces360.vercel.app`). Pour plusieurs origines, séparer par virgules. Render génère `JWT_SECRET`, `GUEST_TOKEN_ENCRYPTION_KEY` et `ADMIN_BOOTSTRAP_KEY`; gardez la dernière secrète et retirez-la après création de l'administrateur initial.
 4. Pour les confirmations de commande par e-mail, ajouter au service Render `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` et `SMTP_FROM` avec les identifiants SMTP. Ces valeurs restent exclusivement côté serveur.
 5. Vérifier `https://<api-render>/api/health` et `https://<api-render>/api/docs`.
