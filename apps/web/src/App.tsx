@@ -1397,8 +1397,3 @@ function selectedGenerationYears(generations: Row[] | undefined, id: string): nu
 }
 
 export default App;
-
-
-
-
-\n
