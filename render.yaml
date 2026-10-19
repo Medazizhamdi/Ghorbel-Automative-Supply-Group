@@ -4,7 +4,8 @@ services:
     runtime: node
     plan: free
     region: frankfurt
-    buildCommand: npm ci && npm run prisma:generate --workspace apps/api && npm run build --workspace apps/api
+    # NODE_ENV=production can cause npm ci to omit TypeScript and @types build dependencies.
+    buildCommand: npm ci --include=dev && npm run prisma:generate --workspace apps/api && npm run build --workspace apps/api
     # Free web services don't support pre-deploy commands. Apply migrations at startup.
     startCommand: npm run prisma:migrate --workspace apps/api && npm run start --workspace apps/api
     healthCheckPath: /api/health
