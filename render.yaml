@@ -2,21 +2,15 @@ services:
   - type: web
     name: autopieces360-api
     runtime: node
-    plan: starter
+    plan: free
     region: frankfurt
     buildCommand: npm ci && npm run prisma:generate --workspace apps/api && npm run build --workspace apps/api
-    preDeployCommand: npm run prisma:migrate --workspace apps/api
-    startCommand: npm run start --workspace apps/api
+    # Free web services don't support pre-deploy commands. Apply migrations at startup.
+    startCommand: npm run prisma:migrate --workspace apps/api && npm run start --workspace apps/api
     healthCheckPath: /api/health
-    disk:
-      name: autopieces360-uploads
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
-      - key: UPLOADS_DIR
-        value: /var/data/uploads
       - key: DATABASE_URL
         fromDatabase:
           name: autopieces360-db
@@ -33,5 +27,5 @@ databases:
   - name: autopieces360-db
     databaseName: autopieces360
     user: autopieces360
-    plan: basic-256mb
+    plan: free
     region: frankfurt
