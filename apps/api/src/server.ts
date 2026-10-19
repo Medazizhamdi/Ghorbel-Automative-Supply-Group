@@ -91,7 +91,7 @@ const deliverEmailOutbox = async () => {
           orderSummaryHtml = `<h3>Résumé de la commande ${escapeHtml(order.orderNumber)}</h3><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f2f6fc"><th style="padding:9px;text-align:left">Désignation / référence</th><th style="padding:9px">Qté</th><th style="padding:9px;text-align:right">PU HT</th><th style="padding:9px">TVA</th><th style="padding:9px;text-align:right">Total TTC</th></tr></thead><tbody>${rowsHtml}</tbody></table><div style="margin:16px 0 22px auto;max-width:260px"><p>Total HT : <strong>${amount(order.subtotalExclTax)}</strong></p><p>TVA : <strong>${amount(order.vatTotal)}</strong></p><p style="font-size:18px">Total TTC : <strong>${amount(order.totalInclTax)}</strong></p></div><p>La facture ${escapeHtml(order.invoiceNumber)} est jointe à cet e-mail.</p>`;
           attachments = [{ filename: `${order.invoiceNumber}.pdf`, content: Buffer.from(order.invoicePdf), contentType: 'application/pdf' }];
         }
-        const html = `<div style="font-family:Arial,sans-serif;color:#18304c;max-width:700px;margin:auto"><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message)}</p>${orderSummaryHtml}${secretHtml}${href ? `<p><a href="${escapeHtml(href)}" style="color:#1263dc">Ouvrir mon espace AutoPièces 360</a></p>` : ''}<hr><small>AutoPièces 360 · Ghorbel AutoPièces</small></div>`;
+        const html = `<div style="font-family:Arial,sans-serif;color:#18304c;max-width:700px;margin:auto"><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message)}</p>${orderSummaryHtml}${secretHtml}${href ? `<p><a href="${escapeHtml(href)}" style="color:#1263dc">Ouvrir mon espace Ghorbel Automative Supply Group</a></p>` : ''}<hr><small>Ghorbel Automative Supply Group</small></div>`;
         await emailTransport.sendMail({ from: process.env.SMTP_FROM!, to: item.emailTo, subject: item.title, text: `${item.message}${orderSummaryText}${secretText}${href ? `\n\n${href}` : ''}`, html, attachments, messageId: `<${createHash('sha256').update(item.eventKey).digest('hex')}@autopieces360>` });
         await prisma.notification.update({ where: { id: item.id }, data: { emailStatus: 'SENT', emailSentAt: new Date(), emailLockedAt: null, emailLastError: null, emailSecretEncrypted: null } });
       } catch (error) {
@@ -1712,7 +1712,7 @@ app.patch('/api/admin/supplier-offers/:id/status', requireAuth, requireAdmin, as
       if (!current || !current.supplierId || !current.supplier) throw Object.assign(new Error('Offre ou fournisseur introuvable.'), { httpStatus: 404 });
       const updated = await tx.supplierOffer.update({ where: { id: current.id }, data: { status: payload.data.status }, select: supplierOfferSelect });
       if (current.status !== payload.data.status) await recalculateMarginPrices(tx, { productId: current.productId });
-      if (current.status !== payload.data.status) await enqueueNotification(tx, { userId: current.supplierId, emailTo: current.supplier.email, eventKey: `supplierOffer.status:${current.id}:${payload.data.status}:${Date.now()}`, title: payload.data.status === 'APPROVED' ? 'Pièce fournisseur approuvée' : 'Pièce fournisseur refusée', message: `Votre proposition « ${current.product.name} » a été ${payload.data.status === 'APPROVED' ? 'approuvée' : 'refusée'} par Ghorbel AutoPièces 360. Connectez-vous à votre espace partenaire pour consulter vos offres.`, link: '/partner' });
+      if (current.status !== payload.data.status) await enqueueNotification(tx, { userId: current.supplierId, emailTo: current.supplier.email, eventKey: `supplierOffer.status:${current.id}:${payload.data.status}:${Date.now()}`, title: payload.data.status === 'APPROVED' ? 'Pièce fournisseur approuvée' : 'Pièce fournisseur refusée', message: `Votre proposition « ${current.product.name} » a été ${payload.data.status === 'APPROVED' ? 'approuvée' : 'refusée'} par Ghorbel Automative Supply Group. Connectez-vous à votre espace partenaire pour consulter vos offres.`, link: '/partner' });
       if (current.status !== payload.data.status) await recordAudit(tx, { actorId: req.user!.sub, action: payload.data.status === 'APPROVED' ? 'SUPPLIER_OFFER_APPROVED' : 'SUPPLIER_OFFER_REJECTED', entityType: 'SUPPLIER_OFFER', entityId: current.id, details: { from: current.status, to: payload.data.status, product: current.product.name } });
       return updated;
     });
@@ -2000,7 +2000,7 @@ const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt:
     const ops = [pdfRect(0, 0, 595, 842, '1 1 1'), pdfRect(0, 827, 595, 15, '0.04 0.28 0.65')];
     if (!continued) {
       ops.push('q 64 0 0 64 42 744 cm /Logo Do Q');
-      ops.push(pdfText(119, 790, 'GHORBEL AUTOPIECES 360', 16, 'F2', '0.04 0.16 0.34'));
+      ops.push(pdfText(119, 790, 'GHORBEL AUTOMATIVE SUPPLY GROUP', 16, 'F2', '0.04 0.16 0.34'));
       ops.push(pdfText(119, 770, 'FACTURE', 11, 'F2', '0.04 0.36 0.86'));
       ops.push(pdfText(392, 790, `N° ${input.invoiceNumber}`, 10, 'F2'));
       ops.push(pdfText(392, 772, `Date : ${input.issuedAt.toISOString().slice(0, 10)}`, 9));
@@ -2066,7 +2066,7 @@ const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt:
   page.ops.push(pdfText(473, totalY + 2, `${((subtotalMills + vatMills) / 1000).toFixed(3)} TND`, 10, 'F2', '0.04 0.28 0.65'));
   for (const ops of pages) {
     ops.push(pdfLine(40, 42, 555, 42));
-    ops.push(pdfText(42, 27, 'Ghorbel AutoPieces 360 · Document genere automatiquement', 7.5, 'F1', '0.42 0.49 0.58'));
+    ops.push(pdfText(42, 27, 'Ghorbel Automative Supply Group · Document genere automatiquement', 7.5, 'F1', '0.42 0.49 0.58'));
     ops.push(pdfText(500, 27, input.orderNumber, 7, 'F1', '0.42 0.49 0.58'));
   }
 
@@ -2095,7 +2095,7 @@ const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt:
 };
 const orderDocument = (order: { orderNumber: string; invoiceNumber?: string | null; invoiceIssuedAt?: Date | null; createdAt: Date; deliveryName: string; deliveryPhone: string; deliveryAddress: string; deliveryCity: string; paymentMethod: string; paymentStatus: string; subtotalExclTax: Prisma.Decimal; vatTotal: Prisma.Decimal; totalInclTax: Prisma.Decimal; lines: { productNameSnapshot: string; productSkuSnapshot: string; quantity: number; unitPriceExclTax: Prisma.Decimal; vatRateSnapshot: Prisma.Decimal; lineSubtotalExclTax: Prisma.Decimal; lineVat: Prisma.Decimal; lineTotalInclTax: Prisma.Decimal }[] }) => standardInvoiceDocument({
   invoiceNumber: order.invoiceNumber || `FACT-${order.orderNumber}`, issuedAt: order.invoiceIssuedAt || order.createdAt,
-  issuer: 'Ghorbel AutoPièces 360', recipient: order.deliveryName, recipientContact: `${order.deliveryPhone} · ${order.deliveryAddress}, ${order.deliveryCity}`,
+  issuer: 'Ghorbel Automative Supply Group', recipient: order.deliveryName, recipientContact: `${order.deliveryPhone} · ${order.deliveryAddress}, ${order.deliveryCity}`,
   orderNumber: order.orderNumber, paymentLabel: `${order.paymentMethod === 'CASH_ON_DELIVERY' ? 'A la livraison' : 'Virement bancaire'} · ${order.paymentStatus}`,
   lines: order.lines.map((line) => ({ name: line.productNameSnapshot, reference: line.productSkuSnapshot, quantity: line.quantity, unitPriceExclTax: Number(line.unitPriceExclTax), vatRate: Number(line.vatRateSnapshot), lineSubtotalExclTax: Number(line.lineSubtotalExclTax), lineVat: Number(line.lineVat) })),
 });
@@ -2406,7 +2406,7 @@ app.post('/api/orders', optionalAuth, async (req: AuthenticatedRequest, res, nex
       const orderNumber = `AP-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID().slice(0, 6).toUpperCase()}`;
       const invoiceNumber = `FACT-${orderNumber}`;
       const invoiceIssuedAt = new Date();
-      const invoicePdf = await standardInvoiceDocument({ invoiceNumber, issuedAt: invoiceIssuedAt, issuer: 'Ghorbel AutoPièces 360', recipient: payload.data.deliveryName, recipientContact: `${payload.data.deliveryPhone} · ${payload.data.deliveryAddress}, ${payload.data.deliveryCity}`, orderNumber, paymentLabel: payload.data.paymentMethod === 'CASH_ON_DELIVERY' ? 'A la livraison' : 'Virement bancaire', lines: allocations.map((line) => { const lineSubtotal = line.unitNetMills * line.quantity; const lineTotal = line.unitGrossMills * line.quantity; return { name: line.product.name, reference: line.product.sku, quantity: line.quantity, unitPriceExclTax: line.unitNetMills / 1000, vatRate: Number(line.product.vatRate), lineSubtotalExclTax: lineSubtotal / 1000, lineVat: (lineTotal - lineSubtotal) / 1000 }; }) });
+      const invoicePdf = await standardInvoiceDocument({ invoiceNumber, issuedAt: invoiceIssuedAt, issuer: 'Ghorbel Automative Supply Group', recipient: payload.data.deliveryName, recipientContact: `${payload.data.deliveryPhone} · ${payload.data.deliveryAddress}, ${payload.data.deliveryCity}`, orderNumber, paymentLabel: payload.data.paymentMethod === 'CASH_ON_DELIVERY' ? 'A la livraison' : 'Virement bancaire', lines: allocations.map((line) => { const lineSubtotal = line.unitNetMills * line.quantity; const lineTotal = line.unitGrossMills * line.quantity; return { name: line.product.name, reference: line.product.sku, quantity: line.quantity, unitPriceExclTax: line.unitNetMills / 1000, vatRate: Number(line.product.vatRate), lineSubtotalExclTax: lineSubtotal / 1000, lineVat: (lineTotal - lineSubtotal) / 1000 }; }) });
       const created = await tx.order.create({ data: {
         orderNumber, invoiceNumber, invoiceIssuedAt, invoicePdf, customerId: req.user?.sub ?? null, guestEmail: req.user ? null : payload.data.guestEmail!, guestAccessTokenHash, guestAccessExpiresAt, paymentMethod: payload.data.paymentMethod, deliveryName: payload.data.deliveryName, deliveryPhone: payload.data.deliveryPhone,
         deliveryAddress: payload.data.deliveryAddress, deliveryCity: payload.data.deliveryCity, customerNote: payload.data.customerNote,
@@ -2421,7 +2421,7 @@ app.post('/api/orders', optionalAuth, async (req: AuthenticatedRequest, res, nex
       }, select: { id: true, orderNumber: true, invoiceNumber: true, invoiceIssuedAt: true, status: true, paymentMethod: true, paymentStatus: true, subtotalExclTax: true, vatTotal: true, totalInclTax: true, currency: true, createdAt: true, lines: { select: { id: true, productNameSnapshot: true, quantity: true, status: true, lineTotalInclTax: true } } } });
       await tx.stockMovement.createMany({ data: allocations.map((line) => ({ stockItemId: line.stockItemId, warehouseId: line.warehouseId, offerId: line.offerId, type: 'RESERVATION' as const, quantity: line.quantity, reason: `Commande ${orderNumber}`, actorId: auditActorId })) });
       if (user) await enqueueNotification(tx, { userId: req.user!.sub, emailTo: user.email, eventKey: `order.created.customer:${created.id}`, title: 'Commande enregistrée', message: `Votre commande ${orderNumber} a été enregistrée. Son suivi est disponible dans votre espace client.`, link: '/' });
-      else await enqueueNotification(tx, { userId: null, emailTo: payload.data.guestEmail!, eventKey: `order.created.guest:${created.id}`, title: 'Commande enregistrée · AutoPièces 360', message: `Votre commande ${orderNumber} est enregistrée. Le code privé de suivi (valable 30 jours) figure dans cet e-mail ; conservez-le pour consulter la commande sur notre site.`, emailSecretEncrypted: encryptEmailSecret(guestAccessToken!), link: '/' });
+      else await enqueueNotification(tx, { userId: null, emailTo: payload.data.guestEmail!, eventKey: `order.created.guest:${created.id}`, title: 'Commande enregistrée · Ghorbel Automative Supply Group', message: `Votre commande ${orderNumber} est enregistrée. Le code privé de suivi (valable 30 jours) figure dans cet e-mail ; conservez-le pour consulter la commande sur notre site.`, emailSecretEncrypted: encryptEmailSecret(guestAccessToken!), link: '/' });
       const suppliers = new Map(allocations.map((line) => [line.supplierId, line.supplierEmail]));
       for (const [supplierId, supplierEmail] of suppliers) await enqueueNotification(tx, { userId: supplierId, emailTo: supplierEmail, eventKey: `order.created.supplier:${created.id}:${supplierId}`, title: 'Nouvelle commande à préparer', message: `Des articles vous ont été attribués sur la commande ${orderNumber}. Connectez-vous à votre espace fournisseur pour la traiter.`, link: '/partner' });
       return created;
@@ -2548,7 +2548,7 @@ app.post('/api/partner/orders/:orderId/invoices/generate', requireAuth, requireP
     const supplierName = supplier.companyName || `${supplier.firstName} ${supplier.lastName}`.trim();
     const pdf = await standardInvoiceDocument({
       invoiceNumber: payload.data.invoiceNumber, issuedAt: new Date(), issuer: supplierName, issuerContact: supplier.email,
-      recipient: 'Ghorbel AutoPièces 360', orderNumber: order.orderNumber,
+      recipient: 'Ghorbel Automative Supply Group', orderNumber: order.orderNumber,
       paymentLabel: 'Facturation fournisseur de la commande · règlement selon les conditions convenues avec GHORBEL',
       lines: supplierInvoiceLines(lines),
     });
@@ -2560,7 +2560,7 @@ app.post('/api/partner/orders/:orderId/invoices/generate', requireAuth, requireP
       const saved = existing
         ? await tx.supplierInvoice.update({ where: { id: existing.id }, data, select: { id: true, invoiceNumber: true, fileName: true, status: true, uploadedAt: true } })
         : await tx.supplierInvoice.create({ data: { supplierId: req.user!.sub, orderId: orderId.data, invoiceNumber: payload.data.invoiceNumber, ...data }, select: { id: true, invoiceNumber: true, fileName: true, status: true, uploadedAt: true } });
-      await tx.supplierInvoiceEvent.create({ data: { invoiceId: saved.id, actorId: req.user!.sub, type: existing ? 'RESUBMITTED' : 'UPLOADED', note: 'Facture générée avec le modèle standard AutoPièces 360.' } });
+      await tx.supplierInvoiceEvent.create({ data: { invoiceId: saved.id, actorId: req.user!.sub, type: existing ? 'RESUBMITTED' : 'UPLOADED', note: 'Facture générée avec le modèle standard Ghorbel Automative Supply Group.' } });
       await recordAudit(tx, { actorId: req.user!.sub, action: 'SUPPLIER_INVOICE_GENERATED', entityType: 'SUPPLIER_INVOICE', entityId: saved.id, details: { invoiceNumber: payload.data.invoiceNumber, orderNumber: order.orderNumber } });
       return saved;
     });
@@ -2662,7 +2662,7 @@ app.patch('/api/admin/orders/lines/:id/status', requireAuth, requireAdmin, async
         if (!current.stockItemId || !current.warehouseId || !current.supplierOfferId) throw Object.assign(new Error('La réservation de stock de cette pièce est introuvable.'), { httpStatus: 409 });
         const consumed = await tx.stockItem.updateMany({ where: { id: current.stockItemId, reserved: { gte: current.quantity }, onHand: { gte: current.quantity } }, data: { reserved: { decrement: current.quantity }, onHand: { decrement: current.quantity } } });
         if (consumed.count !== 1) throw Object.assign(new Error('Le stock réservé ne correspond plus à la commande.'), { httpStatus: 409 });
-        await tx.stockMovement.create({ data: { stockItemId: current.stockItemId, warehouseId: current.warehouseId, offerId: current.supplierOfferId, type: 'SHIPMENT', quantity: -current.quantity, reason: `Retrait par AutoPièces 360 · commande ${current.order.orderNumber}`, actorId: req.user!.sub } });
+        await tx.stockMovement.create({ data: { stockItemId: current.stockItemId, warehouseId: current.warehouseId, offerId: current.supplierOfferId, type: 'SHIPMENT', quantity: -current.quantity, reason: `Retrait par Ghorbel Automative Supply Group · commande ${current.order.orderNumber}`, actorId: req.user!.sub } });
       }
       const changed = await tx.orderLine.updateMany({ where: { id: current.id, status: current.status }, data: { status: payload.data.status } });
       if (!changed.count) throw Object.assign(new Error('La ligne de commande a été modifiée simultanément.'), { httpStatus: 409 });
@@ -3437,7 +3437,7 @@ app.get('/api/catalog/search', optionalAuth, async (req: AuthenticatedRequest, r
 });
 
 const openapi = {
-  openapi: '3.0.3', info: { title: 'AutoPièces 360 API', version: '0.1.0' },
+  openapi: '3.0.3', info: { title: 'Ghorbel Automative Supply Group API', version: '0.1.0' },
   servers: [{ url: '/' }], paths: {
     '/api/health': { get: { summary: 'API et connexion PostgreSQL', responses: { '200': { description: 'État disponible' }, '503': { description: 'Base inaccessible' } } } },
     '/api/auth/register': { post: { summary: 'Créer un compte particulier; les comptes partenaires sont créés par un administrateur', responses: { '201': { description: 'Compte client créé' }, '409': { description: 'Adresse déjà utilisée' }, '429': { description: 'Limite de tentatives atteinte' } } } },
