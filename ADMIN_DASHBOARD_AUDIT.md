@@ -1,4 +1,4 @@
-# Audit initial — dashboard GHORBEL AutoPièces 360
+# Audit initial — Ghorbel Automative Supply Group
 
 ## Phase 1 : dépôt, architecture et données
 
