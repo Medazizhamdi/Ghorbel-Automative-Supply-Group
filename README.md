@@ -1,4 +1,4 @@
-# AutoPièces 360
+# Ghorbel Automative Supply Group
 
 MVP catalogue automobile : interface React, API REST Express et persistance PostgreSQL via Prisma. Le dépôt ne contient aucun produit/compatibilité inventé. Les marques initiales sont des données de démonstration et ne sont pas proposées comme choix de recherche tant que des modèles vérifiés ne leur sont pas rattachés.
 
