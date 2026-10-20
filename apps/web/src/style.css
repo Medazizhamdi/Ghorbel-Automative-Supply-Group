@@ -180,3 +180,10 @@
 @media(max-width:700px){.nav-row{position:relative}.nav-links.mobile-open{display:flex;position:absolute;z-index:20;top:100%;left:0;right:0;height:auto;flex-direction:column;align-items:stretch;gap:0;padding:8px 16px;background:#fff;border:1px solid #e7ebf1;border-radius:0 0 10px 10px;box-shadow:0 14px 28px #10284624}.nav-links.mobile-open>a{height:auto;min-height:44px;padding:12px 4px;border-bottom:1px solid #edf0f4;font-size:14px}.nav-links.mobile-open>a.active:after{display:none}.mobile-menu-actions{display:grid;gap:4px;padding-top:8px}.mobile-menu-actions button{min-height:42px;text-align:left;padding:0 8px;border:0;border-radius:6px;background:#f5f8fc;color:#183b64;font-size:13px;font-weight:650}.mobile-menu{display:grid;place-items:center;min-width:40px;min-height:40px}.nav-actions{gap:10px}}
 @media(min-width:701px){.mobile-menu-actions{display:none}}
 @media(max-width:700px){.header{z-index:30}}
+
+/* Prevent small phone viewports from forcing horizontal page overflow. */
+body{min-width:320px}
+/* Notifications stay within the viewport, including from narrow partner headers. */
+.notification-popover{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.notification-popover>div{flex:1;min-height:0;max-height:none;overflow:auto}
+@media(max-width:700px){.partner-header{height:auto;min-height:72px;padding:9px 14px;gap:8px;flex-wrap:wrap}.partner-header-right{flex:1;min-width:0;gap:7px;justify-content:flex-end;flex-wrap:wrap}.partner-header-right>span:not(.partner-company-label){display:none}.partner-header-right .partner-secondary-action{white-space:nowrap}.partner-header-right .notification-center{flex:none}}

@@ -1129,12 +1129,12 @@ app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next)
   if (!search.success || !includeArchived.success) return res.status(400).json({ error: 'Recherche produit invalide.' });
   try {
     const [products, settings, categoryMargins] = await Promise.all([
-      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, archivedAt: true, supplierOffers: { where: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } }, orderBy: [{ purchasePrice: 'asc' }, { createdAt: 'asc' }], take: 1, select: { purchasePrice: true } } }, orderBy: { name: 'asc' }, take: 250 }),
+      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { where: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } }, orderBy: [{ purchasePrice: 'asc' }, { createdAt: 'asc' }], take: 1, select: { purchasePrice: true } } }, orderBy: { name: 'asc' }, take: 250 }),
       prisma.companySettings.findUnique({ where: { id: 'default' }, select: { defaultMarginPercent: true } }),
       prisma.categoryMargin.findMany({ select: { category: true, marginPercent: true } }),
     ]);
     const margins = new Map(categoryMargins.map((rule) => [normalizeCategory(rule.category), Number(rule.marginPercent)]));
-    return res.json({ data: products.map(({ supplierOffers, ...product }) => ({ ...product, lowestSupplierCost: supplierOffers[0]?.purchasePrice ?? null, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) })) });
+    return res.json({ data: products.map(({ supplierOffers, _count, ...product }) => ({ ...product, hasPartnerOffer: _count.supplierOffers > 0, lowestSupplierCost: supplierOffers[0]?.purchasePrice ?? null, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) })) });
   } catch (error) { next(error); }
 });
 
@@ -1182,14 +1182,33 @@ app.patch('/api/admin/products/:id/archive', requireAuth, requireAdmin, async (r
   } catch (error) { const status = (error as { httpStatus?: number }).httpStatus; if (status) return res.status(status).json({ error: (error as Error).message }); next(error); }
 });
 
+app.patch('/api/admin/products/:id/publication', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const id = uuid.safeParse(req.params.id);
+  const payload = z.object({ published: z.boolean() }).strict().safeParse(req.body);
+  if (!id.success || !payload.success) return res.status(400).json({ error: 'Action de publication invalide.' });
+  try {
+    const product = await prisma.$transaction(async (tx) => {
+      const current = await tx.product.findUnique({ where: { id: id.data }, select: { id: true, sku: true, name: true, status: true, _count: { select: { supplierOffers: true } } } });
+      if (!current) throw Object.assign(new Error('Pièce introuvable.'), { httpStatus: 404 });
+      if (current._count.supplierOffers > 0) throw Object.assign(new Error('La publication d’une pièce partenaire dépend de la validation de son offre fournisseur.'), { httpStatus: 409 });
+      const status = payload.data.published ? DataStatus.VERIFIED : DataStatus.DEMONSTRATION;
+      const updated = await tx.product.update({ where: { id: current.id }, data: { status }, select: { id: true, sku: true, name: true, status: true } });
+      if (current.status !== status) await recordAudit(tx, { actorId: req.user!.sub, action: payload.data.published ? 'PRODUCT_PUBLISHED' : 'PRODUCT_UNPUBLISHED', entityType: 'PRODUCT', entityId: current.id, details: { sku: current.sku, name: current.name } });
+      return updated;
+    });
+    return res.json({ data: product, message: product.status === DataStatus.VERIFIED ? 'Pièce publiée dans le catalogue client.' : 'Pièce retirée du catalogue client.' });
+  } catch (error) { const status = (error as { httpStatus?: number }).httpStatus; if (status) return res.status(status).json({ error: (error as Error).message }); next(error); }
+});
+
 app.patch('/api/admin/products/:id/pricing', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
   const id = uuid.safeParse(req.params.id);
   const payload = z.object({ mode: z.enum(['MANUAL', 'MARGIN']).default('MANUAL'), listPrice: z.coerce.number().finite().positive().max(100000000).optional(), vatRate: z.coerce.number().finite().refine((value) => value === 19, 'Le taux de vente configuré est fixé à 19 %.') }).strict().refine((value) => value.mode === 'MARGIN' || value.listPrice !== undefined, 'Un prix HT est obligatoire en mode manuel.').safeParse(req.body);
   if (!id.success || !payload.success) return res.status(400).json({ error: 'Prix produit invalide.', details: payload.success ? undefined : payload.error.flatten() });
   try {
     const product = await prisma.$transaction(async (tx) => {
-      const current = await tx.product.findUnique({ where: { id: id.data }, select: { sku: true, category: true, listPrice: true, vatRate: true, pricingMode: true } });
+      const current = await tx.product.findUnique({ where: { id: id.data }, select: { sku: true, category: true, listPrice: true, vatRate: true, pricingMode: true, _count: { select: { supplierOffers: true } } } });
       if (!current) throw Object.assign(new Error('Produit introuvable.'), { code: 'P2025' });
+      if (current._count.supplierOffers > 0 && payload.data.mode === 'MANUAL') throw Object.assign(new Error('Pour une pièce partenaire, le prix client doit suivre le coût fournisseur et la marge GHORBEL. Le prix d’achat reste géré par le partenaire.'), { httpStatus: 409 });
       await tx.product.update({ where: { id: id.data }, data: { pricingMode: payload.data.mode, ...(payload.data.mode === 'MANUAL' ? { listPrice: payload.data.listPrice!.toFixed(3), marginPercent: null } : {}), vatRate: payload.data.vatRate.toFixed(2) } });
       if (payload.data.mode === 'MARGIN') await recalculateMarginPrices(tx);
       const updated = await tx.product.findUniqueOrThrow({ where: { id: id.data }, select: { id: true, sku: true, name: true, category: true, listPrice: true, pricingMode: true, vatRate: true } });
@@ -1199,6 +1218,7 @@ app.patch('/api/admin/products/:id/pricing', requireAuth, requireAdmin, async (r
     return res.json({ data: product });
   } catch (error) {
     if ((error as { code?: string }).code === 'P2025') return res.status(404).json({ error: 'Produit introuvable.' });
+    const status = (error as { httpStatus?: number }).httpStatus; if (status) return res.status(status).json({ error: (error as Error).message });
     next(error);
   }
 });
@@ -3184,7 +3204,8 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
             }
           }
           const pricingMode = await pricingModeForNewProduct(tx, row.category);
-          const product = await tx.product.upsert({ where: { sku: row.sku }, update: { name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { sku: row.sku, name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, status: row.verified ? DataStatus.VERIFIED : DataStatus.DEMONSTRATION, pricingMode } });
+          const existingProduct = await tx.product.findUnique({ where: { sku: row.sku }, select: { id: true, _count: { select: { supplierOffers: true } } } });
+          const product = await tx.product.upsert({ where: { sku: row.sku }, update: { name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, ...(existingProduct && existingProduct._count.supplierOffers > 0 ? {} : { status: DataStatus.VERIFIED }) }, create: { sku: row.sku, name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, status: DataStatus.VERIFIED, pricingMode } });
           const now = row.verified ? new Date() : null;
           const normalizedReference = row.reference ? normalizeReference(row.reference) : undefined;
           if (row.reference && normalizedReference) await tx.productReference.upsert({ where: { normalized_productId: { normalized: normalizedReference, productId: product.id } }, update: { value: row.reference, type: row.referenceType, source: row.source, verifiedAt: row.verified ? now : undefined }, create: { productId: product.id, value: row.reference, normalized: normalizedReference, type: row.referenceType, source: row.source, verifiedAt: now } });

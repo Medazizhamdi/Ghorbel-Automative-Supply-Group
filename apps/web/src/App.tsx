@@ -1,4 +1,5 @@
-import { lazy, useEffect, useState, type FormEvent } from 'react';
+import { lazy, useEffect, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowRight, ArrowUpRight, BadgeCheck, Bell, Box, CarFront, CheckCheck, ChevronDown, CircleHelp, Eye, EyeOff, FileSearch, Gauge, Menu, PackageSearch, Search, ShieldCheck, ShoppingCart, X, Truck, Wrench } from 'lucide-react';
@@ -70,11 +71,33 @@ type AppNotification = { id: string; title: string; message: string; link?: stri
 function NotificationCenter() {
   const navigate = useNavigate();
   const [items, setItems] = useState<AppNotification[]>([]); const [unread, setUnread] = useState(0); const [open, setOpen] = useState(false); const [error, setError] = useState('');
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  const positionPopover = () => {
+    const rect = toggleRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.max(0, Math.min(370, window.innerWidth - 24));
+    const left = Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12));
+    const below = Math.max(0, window.innerHeight - rect.bottom - 22);
+    const above = Math.max(0, rect.top - 22);
+    const maxHeight = Math.min(440, Math.max(100, window.innerHeight - 24), Math.max(below, above));
+    const preferredTop = below >= above ? rect.bottom + 10 : rect.top - maxHeight - 10;
+    const top = Math.max(12, Math.min(preferredTop, window.innerHeight - maxHeight - 12));
+    setPopoverPosition({ top, left, width, maxHeight });
+  };
+  useEffect(() => {
+    if (!open) { setPopoverPosition(null); return; }
+    positionPopover();
+    const update = () => positionPopover();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
+  }, [open]);
   const load = async () => { const token = sessionStorage.getItem('ap360-token') || ''; if (!token) return; const response = await fetch(`${API}/api/notifications`, { headers: { Authorization: `Bearer ${token}` } }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Chargement des notifications impossible.'); setItems(result.data); setUnread(result.unreadCount); };
   useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : 'API indisponible.')); const timer = window.setInterval(() => { void load().catch(() => undefined); }, 60_000); return () => window.clearInterval(timer); }, []);
   const markRead = async (id: string) => { const token = sessionStorage.getItem('ap360-token') || ''; try { const response = await fetch(`${API}/api/notifications/${id}/read`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }); if (!response.ok && response.status !== 404) throw new Error('Mise à jour impossible.'); setItems((current) => current.map((item) => item.id === id ? { ...item, readAt: item.readAt || new Date().toISOString() } : item)); setUnread((count) => Math.max(0, count - (items.find((item) => item.id === id && !item.readAt) ? 1 : 0))); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Mise à jour impossible.'); } };
   const markAllRead = async () => { const token = sessionStorage.getItem('ap360-token') || ''; try { const response = await fetch(`${API}/api/notifications/read-all`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error('Mise à jour impossible.'); setItems((current) => current.map((item) => ({ ...item, readAt: item.readAt || new Date().toISOString() }))); setUnread(0); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Mise à jour impossible.'); } };
-  return <div className="notification-center"><button className="notification-toggle" aria-label={`Notifications${unread ? `, ${unread} non lue(s)` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); setError(''); }}><Bell size={17}/>{unread > 0 && <span>{unread > 99 ? '99+' : unread}</span>}</button>{open && <section className="notification-popover" aria-label="Centre de notifications"><header><strong>Notifications</strong><button onClick={() => void markAllRead()} disabled={!unread}><CheckCheck size={15}/> Tout lire</button></header>{error && <p className="notification-error">{error}</p>}{items.length === 0 ? <p className="notification-empty">Aucune notification pour le moment.</p> : <div>{items.map((item) => <a key={item.id} href={item.link || '#'} className={item.readAt ? '' : 'unread'} onClick={(event) => { event.preventDefault(); void (async () => { if (!item.readAt) await markRead(item.id); setOpen(false); if (item.link) navigate(item.link); })(); }}><strong>{item.title}</strong><span>{item.message}</span><small>{new Date(item.createdAt).toLocaleString('fr-FR')}</small></a>)}</div>}</section>}</div>;
+  return <div className="notification-center"><button ref={toggleRef} className="notification-toggle" aria-label={`Notifications${unread ? `, ${unread} non lue(s)` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); setError(''); }}><Bell size={17}/>{unread > 0 && <span>{unread > 99 ? '99+' : unread}</span>}</button>{open && popoverPosition && createPortal(<section className="notification-popover" aria-label="Centre de notifications" style={{ position: 'fixed', top: popoverPosition.top, left: popoverPosition.left, right: 'auto', width: popoverPosition.width, maxHeight: popoverPosition.maxHeight, zIndex: 3000 }}><header><strong>Notifications</strong><button onClick={() => void markAllRead()} disabled={!unread}><CheckCheck size={15}/> Tout lire</button></header>{error && <p className="notification-error">{error}</p>}{items.length === 0 ? <p className="notification-empty">Aucune notification pour le moment.</p> : <div>{items.map((item) => <a key={item.id} href={item.link || '#'} className={item.readAt ? '' : 'unread'} onClick={(event) => { event.preventDefault(); void (async () => { if (!item.readAt) await markRead(item.id); setOpen(false); if (item.link) navigate(item.link); })(); }}><strong>{item.title}</strong><span>{item.message}</span><small>{new Date(item.createdAt).toLocaleString('fr-FR')}</small></a>)}</div>}</section>, document.body)}</div>;
 }
 
 type AdminDashboardData = {
@@ -120,7 +143,7 @@ type AdminMovement = { id: string; type: string; quantity: number; reason: strin
 type PartnerInventoryData = { warehouses: AdminWarehouse[]; items: AdminStock[]; movements: Omit<AdminMovement, 'actor'>[] };
 
 type PricingProfileRow = { id: string; name: string; description?: string | null; discountPercent: string | number; active: boolean; _count: { users: number }; productPrices?: { productId: string; discountPercent: string | number; product: { id: string; sku: string; name: string } }[]; categoryPrices?: { category: string; discountPercent: string | number }[] };
-type PricingProductRow = { id: string; sku: string; name: string; category?: string | null; status: string; listPrice?: string | number | null; pricingMode?: 'MANUAL' | 'MARGIN'; marginPercent?: string | number | null; lowestSupplierCost?: string | number | null; effectiveMarginPercent?: string | number; vatRate: string | number };
+type PricingProductRow = { id: string; sku: string; name: string; category?: string | null; status: string; hasPartnerOffer: boolean; listPrice?: string | number | null; pricingMode?: 'MANUAL' | 'MARGIN'; marginPercent?: string | number | null; lowestSupplierCost?: string | number | null; effectiveMarginPercent?: string | number; vatRate: string | number };
 type PricingAccountRow = { id: string; email: string; companyName?: string | null; role: string; status: string; pricingProfileId?: string | null };
 type CategoryMarginRow = { category: string; marginPercent: string | number };
 
