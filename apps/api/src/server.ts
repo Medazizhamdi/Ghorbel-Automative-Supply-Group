@@ -417,7 +417,8 @@ app.post('/api/contact-messages', async (req, res, next) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const limit = contactRateLimits.get(ip);
   if (limit && limit.resetAt > now && limit.count >= 5) return res.status(429).json({ error: 'Trop de messages envoyés. Réessayez dans quelques minutes.' });
-  if (!limit || limit.resetAt <= now) contactRateLimits.set(ip, { count: 1, resetAt: now + 15 * 60_000 });
+  const resetAt = !limit || limit.resetAt <= now ? now + 15 * 60_000 : limit.resetAt;
+  if (!limit || limit.resetAt <= now) contactRateLimits.set(ip, { count: 1, resetAt });
   else limit.count += 1;
   if (contactRateLimits.size > 5000) for (const [key, value] of contactRateLimits) if (value.resetAt <= now) contactRateLimits.delete(key);
   try {
@@ -437,7 +438,15 @@ app.post('/api/contact-messages', async (req, res, next) => {
       return created;
     });
     return res.status(201).json({ data: { id: message.id, accepted: true } });
-  } catch (error) { next(error); }
+  } catch (error) {
+    // Failed database writes must not consume the visitor's contact-message quota.
+    const currentLimit = contactRateLimits.get(ip);
+    if (currentLimit?.resetAt === resetAt) {
+      currentLimit.count = Math.max(0, currentLimit.count - 1);
+      if (currentLimit.count === 0) contactRateLimits.delete(ip);
+    }
+    next(error);
+  }
 });
 
 app.get('/api/admin/contact-messages', requireAuth, requireAdmin, async (_req, res, next) => {
