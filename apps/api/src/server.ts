@@ -41,12 +41,15 @@ const decryptEmailSecret = (value: string) => {
 };
 const emailDelivery = createEmailDelivery();
 
-const enqueueNotification = async (tx: Prisma.TransactionClient, input: { userId: string | null; emailTo: string; eventKey: string; title: string; message: string; link?: string; emailSecretEncrypted?: string }) => tx.notification.upsert({
-  where: { eventKey: input.eventKey },
-  create: { ...input, emailStatus: 'QUEUED' },
-  update: {},
-  select: { id: true },
-});
+const enqueueNotification = async (tx: Prisma.TransactionClient, input: { userId: string | null; emailTo: string; eventKey: string; title: string; message: string; link?: string; emailSecretEncrypted?: string; internalOnly?: boolean }) => {
+  const { internalOnly, ...notification } = input;
+  return tx.notification.upsert({
+    where: { eventKey: input.eventKey },
+    create: { ...notification, emailStatus: internalOnly ? 'SKIPPED' : 'QUEUED' },
+    update: {},
+    select: { id: true },
+  });
+};
 const contactInboxEmail = process.env.CONTACT_INBOX_EMAIL?.trim() || 'ghorbelautomotivesupplygroup@gmail.com';
 const contactRateLimits = new Map<string, { count: number; resetAt: number }>();
 
@@ -848,12 +851,12 @@ app.patch('/api/admin/users/:id/legal-profile-status', requireAuth, requireAdmin
     const result = await prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({ where: { id: id.data }, select: { id: true, role: true, legalProfileStatus: true } });
       if (!user) return null;
-      if (user.role !== 'SUPPLIER') throw Object.assign(new Error('Cette validation concerne uniquement les fournisseurs.'), { statusCode: 409 });
+      if (user.role !== 'SUPPLIER' && user.role !== 'RESELLER') throw Object.assign(new Error('Cette validation concerne les fournisseurs et revendeurs.'), { statusCode: 409 });
       const updated = await tx.user.update({ where: { id: id.data }, data: { legalProfileStatus: payload.data.status }, select: { id: true, legalProfileStatus: true } });
-      await recordAudit(tx, { actorId: req.user!.sub, action: payload.data.status === 'APPROVED' ? 'SUPPLIER_LEGAL_PROFILE_APPROVED' : 'SUPPLIER_LEGAL_PROFILE_REVIEW_REQUIRED', entityType: 'USER', entityId: id.data, details: { fromStatus: user.legalProfileStatus, toStatus: updated.legalProfileStatus } });
+      await recordAudit(tx, { actorId: req.user!.sub, action: payload.data.status === 'APPROVED' ? 'PARTNER_LEGAL_PROFILE_APPROVED' : 'PARTNER_LEGAL_PROFILE_REVIEW_REQUIRED', entityType: 'USER', entityId: id.data, details: { role: user.role, fromStatus: user.legalProfileStatus, toStatus: updated.legalProfileStatus } });
       return updated;
     });
-    if (!result) return res.status(404).json({ error: 'Fournisseur introuvable.' });
+    if (!result) return res.status(404).json({ error: 'Compte partenaire introuvable.' });
     return res.json({ data: result, message: payload.data.status === 'APPROVED' ? 'Profil légal validé.' : 'Une correction du profil est demandée.' });
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode) return res.status((error as { statusCode: number }).statusCode).json({ error: (error as Error).message });
@@ -1006,6 +1009,7 @@ app.post('/api/admin/accounts', requireAuth, requireAdmin, async (req: Authentic
       await recordAudit(tx, { actorId: req.user!.sub, action: 'PARTNER_ACCOUNT_CREATED', entityType: 'USER', entityId: created.id, details: { role: created.role, companyName: created.companyName ?? '' } });
       const partnerType = created.role === 'SUPPLIER' ? 'fournisseur' : 'revendeur';
       await enqueueNotification(tx, { userId: created.id, emailTo: created.email, eventKey: `welcome.partner.${created.role.toLowerCase()}:${created.id}`, title: 'Bienvenue dans le réseau partenaire GHORBEL', message: `Bonjour ${created.firstName},\n\nVotre compte ${partnerType} pour ${created.companyName} est actif. Connectez-vous à votre espace partenaire pour gérer votre activité et retrouver les commandes qui vous sont attribuées.`, link: '/partner' });
+      await enqueueNotification(tx, { userId: created.id, emailTo: created.email, eventKey: `partner.legal-validation:${created.id}`, title: 'Validation des informations légales', message: 'Complétez les informations légales de votre entreprise (raison sociale, adresse, identifiant fiscal et registre de commerce) depuis Profil et sécurité. GHORBEL les vérifiera ensuite.', link: '/partner/profile', internalOnly: true });
       return created;
     });
     return res.status(201).json({ data: user, message: 'Compte partenaire créé. Remettez les identifiants au partenaire par un canal privé.' });

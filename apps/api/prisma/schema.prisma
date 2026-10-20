@@ -104,6 +104,7 @@ enum NotificationEmailStatus {
   PROCESSING
   SENT
   FAILED
+  SKIPPED
 }
 
 enum SupplierInvoiceStatus {
