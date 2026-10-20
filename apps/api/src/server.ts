@@ -216,7 +216,7 @@ const requirePartner = async (req: AuthenticatedRequest, res: Response, next: Ne
     next();
   } catch (error) { next(error); }
 };
-app.post('/api/partner/uploads/images', requireAuth, requirePartner, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' }), async (req: AuthenticatedRequest, res, next) => {
+const uploadProductImage = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'Sélectionnez une image JPEG, PNG ou WebP.' });
     const buffer = req.body as Buffer;
@@ -231,7 +231,9 @@ app.post('/api/partner/uploads/images', requireAuth, requirePartner, express.raw
     await writeFile(path.join(uploadsDirectory, filename), buffer, { flag: 'wx' });
     return res.status(201).json({ data: { url: `/uploads/${filename}`, mimeType: mime, fileSize: buffer.length } });
   } catch (error) { next(error); }
-});
+};
+app.post('/api/partner/uploads/images', requireAuth, requirePartner, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' }), uploadProductImage);
+app.post('/api/admin/uploads/images', requireAuth, requireAdmin, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' }), uploadProductImage);
 const requirePurchaser = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   if (!req.user) return res.status(401).json({ error: 'Authentification requise.' });
   try {

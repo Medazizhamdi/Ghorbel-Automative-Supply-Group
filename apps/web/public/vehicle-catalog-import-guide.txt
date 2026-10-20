@@ -1,0 +1,34 @@
+GHORBEL — IMPORT DU RÉFÉRENTIEL DE VÉHICULES
+=============================================
+
+Le fichier vehicle-catalog-import-template.csv utilise le point-virgule (;) comme séparateur, pour Excel en français.
+Gardez la première ligne d’en-têtes intacte et ajoutez un véhicule par ligne. Les données moteur et version sont facultatives.
+
+COLONNES OBLIGATOIRES
+- make : marque, par exemple Volkswagen.
+- model : modèle, par exemple Golf.
+- generation : génération, par exemple Golf VII.
+- yearFrom : première année de cette génération (1900–2100).
+
+COLONNES FACULTATIVES
+- category : catégorie du véhicule (voiture, utilitaire, camion, bus, etc.).
+- yearTo : dernière année; laisser vide si la génération est encore produite ou inconnue.
+- engine / engineCode : nom et code de motorisation.
+- fuel : carburant.
+- displacementCc : cylindrée en cm³, nombre entier.
+- powerKw : puissance en kW, nombre entier.
+- variant / bodyStyle / transmission / drivetrain : version, carrosserie, transmission et motricité. Renseigner variant si une autre de ces caractéristiques est fournie.
+
+SOURCE ET VALIDATION
+- source : nom de la source consultée.
+- sourceReference : URL ou référence du document source.
+- verified : mettre true uniquement si la source permet de vérifier les informations; une source est alors obligatoire. Sinon laisser vide ou mettre false. Les entrées non vérifiées restent à valider avant d’être considérées comme fiables.
+
+RÈGLES DE SAISIE
+- Utilisez un point pour les nombres décimaux; entrez les valeurs numériques sans unité.
+- Enregistrez en CSV UTF-8 avec le point-virgule comme séparateur.
+- Limite : 2 Mo et 2 000 véhicules par fichier.
+- Prévisualisez le fichier et corrigez les erreurs avant de confirmer l’import.
+
+EXEMPLE (à copier dans Excel; supprimez cette ligne avant un import réel)
+Volkswagen;Golf;Voiture particulière;Golf VII;2012;2020;1.6 TDI;CAYC;Diesel;1598;77;Trendline;Hayon;Manuelle;Traction;Catalogue constructeur;https://exemple.tn/source;false

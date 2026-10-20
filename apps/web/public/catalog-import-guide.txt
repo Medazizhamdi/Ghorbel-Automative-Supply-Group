@@ -1,0 +1,37 @@
+GHORBEL — IMPORT DU CATALOGUE DE PIÈCES
+========================================
+
+Le fichier catalog-import-template.csv utilise le point-virgule (;) comme séparateur, pour une ouverture correcte dans Excel en français.
+La première ligne contient les noms techniques des colonnes : ne la modifiez pas et conservez leur orthographe.
+Ajoutez les pièces à partir de la ligne 2. Les cellules facultatives peuvent rester vides.
+
+COLONNES OBLIGATOIRES
+- sku : référence interne unique de la pièce.
+- name : désignation affichée dans le catalogue.
+
+INFORMATIONS DE LA PIÈCE
+- category : catégorie, par exemple Freinage ou Refroidissement.
+- pieceBrand : marque de la pièce.
+- description : description courte.
+- reference : référence OEM ou équivalente.
+- referenceType : OEM ou ALTERNATIVE (OEM par défaut).
+
+COMPATIBILITÉ VÉHICULE (FACULTATIVE)
+Si une compatibilité est renseignée, make, model, generation et yearFrom sont obligatoires ensemble.
+- make / model / generation : marque, modèle et génération du véhicule.
+- yearFrom / yearTo : année de début et année de fin (1900–2100). yearTo peut rester vide.
+- engine / engineCode / fuel / displacementCc / powerKw : motorisation; renseigner engine ou engineCode si les caractéristiques moteur sont indiquées.
+- variant / bodyStyle / transmission / drivetrain : version et caractéristiques; variant est requis si l’une des trois dernières colonnes est renseignée.
+
+SOURCE ET VÉRIFICATION
+- source / sourceReference : origine et référence justificative des données véhicule.
+- verified : true uniquement si les données de compatibilité sont vérifiées et qu’une source est indiquée; sinon laisser vide ou mettre false.
+
+RÈGLES DE SAISIE
+- Une ligne par référence ou compatibilité. Pour répéter un SKU, gardez le même nom, la même catégorie, la même marque de pièce et la même description.
+- Les nombres décimaux utilisent un point (ex. 1.6); ne mettez ni séparateur de milliers ni unité dans les cellules numériques.
+- Le fichier doit rester au format CSV UTF-8, avec le point-virgule comme séparateur. Limite : 2 Mo et 2 000 lignes de données.
+- L’import commence par une prévisualisation. Vérifiez toutes les erreurs avant de confirmer.
+
+EXEMPLE DE LIGNE (à copier dans Excel; supprimez-la avant un import réel)
+P-100;Filtre à huile;Filtration;Bosch;Filtre moteur;0986AF1234;OEM;Volkswagen;Golf;Golf VII;2012;2020;1.6 TDI;CAYC;Diesel;1598;77;Trendline;Hayon;Manuelle;Traction;Catalogue constructeur;https://exemple.tn/source;false

@@ -1,0 +1,36 @@
+GHORBEL — IMPORT DES OFFRES FOURNISSEUR / REVENDEUR
+===================================================
+
+Le fichier supplier-offer-template.csv utilise le point-virgule (;) comme séparateur, pour Excel en français.
+Gardez la première ligne d’en-têtes intacte et saisissez une offre par ligne. Les colonnes facultatives peuvent rester vides.
+
+COLONNES OBLIGATOIRES
+- supplierSku : votre référence fournisseur, unique dans votre catalogue.
+- name : désignation de la pièce.
+- purchasePrice : votre prix HT proposé à GHORBEL, en TND. Utilisez un point pour les décimales (ex. 17.850), sans texte ni séparateur de milliers.
+
+INFORMATIONS COMPLÉMENTAIRES
+- purchaseVatRate : taux de TVA fournisseur en pourcentage (19 par défaut).
+- category : catégorie de la pièce.
+- pieceBrand : marque de la pièce.
+- description : description destinée à présenter la pièce.
+- reference : référence constructeur ou équivalente.
+- referenceType : OEM ou ALTERNATIVE (OEM par défaut).
+- images : URL HTTPS des photos; plusieurs URL peuvent être séparées par le caractère |.
+
+COMPATIBILITÉ (FACULTATIVE)
+Si vous indiquez une compatibilité, make, model, generation et year doivent tous être renseignés.
+- make / model / generation : marque, modèle et génération du véhicule.
+- year : année du véhicule, entre 1900 et 2100.
+- engineCode / variant : code moteur et version, s’ils sont connus.
+- La compatibilité doit correspondre à une entrée vérifiée du référentiel GHORBEL.
+
+À SAVOIR
+- Une seule ligne par supplierSku dans un fichier. Modifiez une offre existante en réutilisant exactement son supplierSku.
+- Le stock n’est pas importé par ce fichier : gérez-le dans « Stock et disponibilités ».
+- Une hausse de prix d’une offre existante reste en attente jusqu’à validation GHORBEL; la baisse suit le flux normal.
+- CSV UTF-8, point-virgule comme séparateur, 2 Mo maximum et 500 lignes de données.
+- L’import affiche d’abord une prévisualisation. Les lignes avec erreurs ne seront pas appliquées.
+
+EXEMPLE (à copier dans Excel; supprimez cette ligne avant un import réel)
+FOUR-100;Filtre à huile;17.850;19;Filtration;Bosch;Filtre moteur;0986AF1234;OEM;https://exemple.tn/photo.jpg;Volkswagen;Golf;Golf VII;2018;CAYC;Trendline
