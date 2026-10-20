@@ -160,6 +160,8 @@ model User {
   companySettingsUpdates   CompanySettings[]      @relation("CompanySettingsUpdater")
   partnerConversations     PartnerConversation[]  @relation("PartnerConversationSupplier")
   partnerMessages          PartnerConversationMessage[] @relation("PartnerMessageSender")
+  contactMessages          ContactMessage[] @relation("ContactMessageSender")
+  contactReplies           ContactMessageReply[]
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
 
@@ -585,6 +587,35 @@ model PartnerConversationMessage {
 
   @@index([conversationId, createdAt])
   @@index([senderId, readAt])
+}
+
+model ContactMessage {
+  id        String                @id @default(uuid()) @db.Uuid
+  userId    String?               @db.Uuid
+  user      User?                 @relation("ContactMessageSender", fields: [userId], references: [id], onDelete: SetNull)
+  fullName  String                @db.VarChar(160)
+  email     String                @db.VarChar(254)
+  subject   String                @db.VarChar(180)
+  body      String                @db.VarChar(5000)
+  readAt    DateTime?
+  replies   ContactMessageReply[]
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  @@index([readAt, createdAt])
+  @@index([email, createdAt])
+}
+
+model ContactMessageReply {
+  id        String        @id @default(uuid()) @db.Uuid
+  messageId String        @db.Uuid
+  message   ContactMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  adminId   String?       @db.Uuid
+  admin     User?         @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  body      String        @db.VarChar(5000)
+  createdAt DateTime      @default(now())
+
+  @@index([messageId, createdAt])
 }
 
 model PaymentEvent {

@@ -47,6 +47,8 @@ const enqueueNotification = async (tx: Prisma.TransactionClient, input: { userId
   update: {},
   select: { id: true },
 });
+const contactInboxEmail = process.env.CONTACT_INBOX_EMAIL?.trim() || 'ghorbelautomotivesupplygroup@gmail.com';
+const contactRateLimits = new Map<string, { count: number; resetAt: number }>();
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 let emailWorkerBusy = false;
@@ -396,6 +398,94 @@ app.get('/api/admin/audit-logs', requireAuth, requireAdmin, async (req, res, nex
     const hasMore = rows.length > parsed.data.limit;
     const data = hasMore ? rows.slice(0, parsed.data.limit) : rows;
     return res.json({ data, nextCursor: hasMore ? data[data.length - 1]?.id ?? null : null });
+  } catch (error) { next(error); }
+});
+
+const contactMessagePayload = z.object({
+  fullName: z.string().trim().min(2).max(160),
+  email: z.string().trim().email().max(254),
+  subject: z.string().trim().min(3).max(180),
+  body: z.string().trim().min(10).max(5000),
+  website: z.string().max(200).optional(),
+}).strict();
+
+app.post('/api/contact-messages', async (req, res, next) => {
+  const parsed = contactMessagePayload.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Vérifiez le nom, l’e-mail, l’objet et le contenu du message.' });
+  if (parsed.data.website?.trim()) return res.status(202).json({ data: { accepted: true } });
+  const now = Date.now();
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const limit = contactRateLimits.get(ip);
+  if (limit && limit.resetAt > now && limit.count >= 5) return res.status(429).json({ error: 'Trop de messages envoyés. Réessayez dans quelques minutes.' });
+  if (!limit || limit.resetAt <= now) contactRateLimits.set(ip, { count: 1, resetAt: now + 15 * 60_000 });
+  else limit.count += 1;
+  if (contactRateLimits.size > 5000) for (const [key, value] of contactRateLimits) if (value.resetAt <= now) contactRateLimits.delete(key);
+  try {
+    const message = await prisma.$transaction(async (tx) => {
+      const created = await tx.contactMessage.create({
+        data: { fullName: parsed.data.fullName, email: parsed.data.email.toLowerCase(), subject: parsed.data.subject, body: parsed.data.body },
+        select: { id: true, fullName: true, email: true, subject: true, body: true, createdAt: true },
+      });
+      await enqueueNotification(tx, {
+        userId: null,
+        emailTo: contactInboxEmail,
+        eventKey: `contact.message.received:${created.id}`,
+        title: `Nouveau message du site : ${created.subject}`,
+        message: `De : ${created.fullName}\nE-mail : ${created.email}\nObjet : ${created.subject}\n\n${created.body}`,
+        link: '/admin/contacts',
+      });
+      return created;
+    });
+    return res.status(201).json({ data: { id: message.id, accepted: true } });
+  } catch (error) { next(error); }
+});
+
+app.get('/api/admin/contact-messages', requireAuth, requireAdmin, async (_req, res, next) => {
+  try {
+    await prisma.contactMessage.updateMany({ where: { readAt: null }, data: { readAt: new Date() } });
+    const data = await prisma.contactMessage.findMany({
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, fullName: true, email: true, subject: true, body: true, readAt: true, createdAt: true, replies: { orderBy: { createdAt: 'asc' }, select: { id: true, body: true, createdAt: true, admin: { select: { firstName: true, lastName: true } } } } },
+    });
+    return res.json({ data });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/admin/contact-messages/:id/replies', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const payload = z.object({ body: z.string().trim().min(2).max(5000) }).strict().safeParse(req.body);
+  if (!id.success) return res.status(400).json({ error: 'Message introuvable.' });
+  if (!payload.success) return res.status(400).json({ error: 'La réponse doit contenir entre 2 et 5 000 caractères.' });
+  try {
+    const message = await prisma.contactMessage.findUnique({ where: { id: id.data }, select: { id: true, fullName: true, email: true, subject: true } });
+    if (!message) return res.status(404).json({ error: 'Message introuvable.' });
+    const reply = await prisma.$transaction(async (tx) => {
+      const created = await tx.contactMessageReply.create({ data: { messageId: message.id, adminId: req.user!.sub, body: payload.data.body }, select: { id: true, body: true, createdAt: true } });
+      await enqueueNotification(tx, {
+        userId: null,
+        emailTo: message.email,
+        eventKey: `contact.message.reply:${created.id}`,
+        title: `Réponse de GHORBEL : ${message.subject}`,
+        message: `Bonjour ${message.fullName},\n\n${payload.data.body}\n\nEn réponse à votre message : « ${message.subject} »`,
+      });
+      await recordAudit(tx, { actorId: req.user!.sub, action: 'CONTACT_MESSAGE_REPLIED', entityType: 'CONTACT_MESSAGE', entityId: message.id, details: { subject: message.subject, replyId: created.id } });
+      return created;
+    });
+    return res.status(201).json({ data: reply });
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/admin/contact-messages/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Message introuvable.' });
+  try {
+    const message = await prisma.contactMessage.findUnique({ where: { id: id.data }, select: { id: true, subject: true, email: true } });
+    if (!message) return res.status(404).json({ error: 'Message introuvable.' });
+    await prisma.$transaction(async (tx) => {
+      await tx.contactMessage.delete({ where: { id: message.id } });
+      await recordAudit(tx, { actorId: req.user!.sub, action: 'CONTACT_MESSAGE_DELETED', entityType: 'CONTACT_MESSAGE', entityId: message.id, details: { subject: message.subject, sender: message.email } });
+    });
+    return res.json({ data: { id: message.id, deleted: true } });
   } catch (error) { next(error); }
 });
 

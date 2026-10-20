@@ -26,6 +26,8 @@ services:
         value: gmail-api
       - key: EMAIL_FROM
         value: Ghorbel Automative Supply Group <ghorbelautomotivesupplygroup@gmail.com>
+      - key: CONTACT_INBOX_EMAIL
+        value: ghorbelautomotivesupplygroup@gmail.com
       - key: GMAIL_CLIENT_ID
         sync: false
       - key: GMAIL_CLIENT_SECRET
