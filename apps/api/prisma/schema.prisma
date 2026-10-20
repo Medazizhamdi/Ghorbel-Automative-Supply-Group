@@ -349,6 +349,9 @@ model Product {
   pricingMode     ProductPricingMode     @default(MANUAL)
   marginPercent   Decimal?               @db.Decimal(6, 2)
   vatRate         Decimal                @default(19) @db.Decimal(5, 2)
+  directStock     Int                    @default(0)
+  directStockReserved Int                @default(0)
+  directStockDamaged Int                 @default(0)
   archivedAt      DateTime?
   references      ProductReference[]
   compatibilities VehicleCompatibility[]

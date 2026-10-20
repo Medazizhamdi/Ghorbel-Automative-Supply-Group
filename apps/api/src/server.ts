@@ -1129,7 +1129,7 @@ app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next)
   if (!search.success || !includeArchived.success) return res.status(400).json({ error: 'Recherche produit invalide.' });
   try {
     const [products, settings, categoryMargins] = await Promise.all([
-      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { orderBy: { createdAt: 'asc' }, select: { purchasePrice: true, status: true, archivedAt: true, supplier: { select: { id: true, companyName: true, firstName: true, lastName: true, email: true, status: true } } } } }, orderBy: { name: 'asc' }, take: 250 }),
+      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, directStock: true, directStockReserved: true, directStockDamaged: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { orderBy: { createdAt: 'asc' }, select: { purchasePrice: true, status: true, archivedAt: true, supplier: { select: { id: true, companyName: true, firstName: true, lastName: true, email: true, status: true } } } } }, orderBy: { name: 'asc' }, take: 250 }),
       prisma.companySettings.findUnique({ where: { id: 'default' }, select: { defaultMarginPercent: true } }),
       prisma.categoryMargin.findMany({ select: { category: true, marginPercent: true } }),
     ]);
@@ -1140,9 +1140,33 @@ app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next)
       const partnerSuppliers = [...partners.values()];
       const activeApprovedOffers = supplierOffers.filter((offer) => offer.status === 'APPROVED' && !offer.archivedAt && offer.supplier?.status === 'ACTIVE');
       const lowestSupplierCost = activeApprovedOffers.sort((a, b) => Number(a.purchasePrice) - Number(b.purchasePrice))[0]?.purchasePrice ?? null;
-      return { ...product, hasPartnerOffer: _count.supplierOffers > 0, partnerSuppliers, lowestSupplierCost, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) };
+      return { ...product, availableQuantity: _count.supplierOffers > 0 ? null : Math.max(0, product.directStock - product.directStockReserved - product.directStockDamaged), hasPartnerOffer: _count.supplierOffers > 0, partnerSuppliers, lowestSupplierCost, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) };
     }) });
   } catch (error) { next(error); }
+});
+
+const adminProductStockPayload = z.object({ availableQuantity: z.coerce.number().int().min(0).max(1000000) }).strict();
+app.patch('/api/admin/products/:id/stock', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const id = uuid.safeParse(req.params.id); const payload = adminProductStockPayload.safeParse(req.body);
+  if (!id.success || !payload.success) return res.status(400).json({ error: 'Quantité de stock invalide.' });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.product.findUnique({ where: { id: id.data }, select: { id: true, sku: true, name: true, directStock: true, directStockReserved: true, directStockDamaged: true, _count: { select: { supplierOffers: true } } } });
+      if (!current) throw Object.assign(new Error('Pièce introuvable.'), { httpStatus: 404 });
+      if (current._count.supplierOffers > 0) throw Object.assign(new Error('Le stock d’une pièce partenaire reste géré par son fournisseur et son entrepôt.'), { httpStatus: 409 });
+      const newPhysical = payload.data.availableQuantity + current.directStockReserved + current.directStockDamaged;
+      const updated = await tx.product.updateMany({ where: { id: current.id, directStock: current.directStock, directStockReserved: current.directStockReserved, directStockDamaged: current.directStockDamaged }, data: { directStock: newPhysical } });
+      if (updated.count !== 1) throw Object.assign(new Error('Le stock a changé simultanément. Actualisez puis réessayez.'), { httpStatus: 409 });
+      await recordAudit(tx, { actorId: req.user!.sub, action: 'ADMIN_PRODUCT_STOCK_CHANGED', entityType: 'PRODUCT', entityId: current.id, details: { sku: current.sku, previousAvailable: Math.max(0, current.directStock - current.directStockReserved - current.directStockDamaged), availableQuantity: payload.data.availableQuantity } });
+      return { productId: current.id, availableQuantity: payload.data.availableQuantity };
+    }, { isolationLevel: 'Serializable' });
+    return res.json({ data: result, message: `Stock GHORBEL mis à jour : ${result.availableQuantity} pièce(s) disponible(s).` });
+  } catch (error) {
+    const status = (error as { httpStatus?: number }).httpStatus;
+    if (status) return res.status(status).json({ error: (error as Error).message });
+    if ((error as { code?: string }).code === 'P2034') return res.status(409).json({ error: 'Le stock a changé simultanément. Actualisez puis réessayez.' });
+    next(error);
+  }
 });
 
 const adminProductUpdateSchema = z.object({
@@ -2400,7 +2424,7 @@ app.get('/api/orders', requireAuth, requirePurchaser, async (req: AuthenticatedR
 const cancelOrder = async (orderId: string, actorId: string, customerId?: string) => prisma.$transaction(async (tx) => {
   const current = await tx.order.findFirst({
     where: { id: orderId, ...(customerId ? { customerId } : {}) },
-    select: { id: true, customerId: true, guestEmail: true, orderNumber: true, status: true, paymentStatus: true, customer: { select: { email: true } }, lines: { select: { id: true, quantity: true, status: true, stockItemId: true, warehouseId: true, supplierOfferId: true } } },
+    select: { id: true, customerId: true, guestEmail: true, orderNumber: true, status: true, paymentStatus: true, customer: { select: { email: true } }, lines: { select: { id: true, productId: true, quantity: true, status: true, stockItemId: true, warehouseId: true, supplierOfferId: true, supplierSkuSnapshot: true } } },
   });
   if (!current) throw Object.assign(new Error('Commande introuvable.'), { httpStatus: 404 });
   if (current.status === 'CANCELLED') throw Object.assign(new Error('Cette commande est déjà annulée.'), { httpStatus: 409 });
@@ -2413,6 +2437,9 @@ const cancelOrder = async (orderId: string, actorId: string, customerId?: string
       const released = await tx.stockItem.updateMany({ where: { id: line.stockItemId, reserved: { gte: line.quantity } }, data: { reserved: { decrement: line.quantity } } });
       if (released.count !== 1) throw Object.assign(new Error('La réservation de stock ne correspond plus à la commande.'), { httpStatus: 409 });
       await tx.stockMovement.create({ data: { stockItemId: line.stockItemId, warehouseId: line.warehouseId, offerId: line.supplierOfferId, type: 'RELEASE', quantity: line.quantity, reason: `Annulation commande ${current.orderNumber}`, actorId } });
+    } else if (line.productId && !line.stockItemId && !line.supplierOfferId && line.supplierSkuSnapshot !== 'FOURNISSEUR_SUPPRIME') {
+      const released = await tx.product.updateMany({ where: { id: line.productId, directStockReserved: { gte: line.quantity } }, data: { directStockReserved: { decrement: line.quantity } } });
+      if (released.count !== 1) throw Object.assign(new Error('La réservation du stock GHORBEL ne correspond plus à la commande.'), { httpStatus: 409 });
     }
   }
   await tx.orderLine.updateMany({ where: { orderId: current.id }, data: { status: 'CANCELLED' } });
@@ -2559,7 +2586,7 @@ app.post('/api/orders', optionalAuth, async (req: AuthenticatedRequest, res, nex
         if (!paymentSettings?.bankTransferEnabled || !paymentSettings.bankAccountHolder || !paymentSettings.bankName || !paymentSettings.bankRib) throw Object.assign(new Error('Le paiement par virement n’est pas disponible actuellement.'), { httpStatus: 409 });
       }
       const productIds = payload.data.items.map((item) => item.productId);
-      const products = await tx.product.findMany({ where: { id: { in: productIds }, archivedAt: null, listPrice: { not: null }, OR: [{ status: 'VERIFIED', supplierOffers: { none: {} } }, { supplierOffers: { some: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } } } }] }, select: { id: true, sku: true, name: true, category: true, listPrice: true, vatRate: true } });
+      const products = await tx.product.findMany({ where: { id: { in: productIds }, archivedAt: null, listPrice: { not: null }, OR: [{ status: 'VERIFIED', supplierOffers: { none: {} } }, { supplierOffers: { some: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } } } }] }, select: { id: true, sku: true, name: true, category: true, listPrice: true, vatRate: true, directStock: true, directStockReserved: true, directStockDamaged: true, _count: { select: { supplierOffers: true } } } });
       if (products.length !== productIds.length) throw Object.assign(new Error('Une pièce n’est plus disponible à la vente ou son prix doit être confirmé.'), { httpStatus: 409 });
       const profileId = user?.role === 'RESELLER' && user.pricingProfile?.active ? user.pricingProfile.id : null;
       const profileDiscount = profileId && user?.pricingProfile ? Number(user.pricingProfile.discountPercent) : 0;
@@ -2567,18 +2594,26 @@ app.post('/api/orders', optionalAuth, async (req: AuthenticatedRequest, res, nex
       const productDiscountMap = new Map(productDiscounts.map((rule) => [rule.productId, Number(rule.discountPercent)]));
       const categoryDiscounts = profileId ? await tx.profileCategoryPrice.findMany({ where: { profileId }, select: { category: true, discountPercent: true } }) : [];
       const categoryDiscountMap = new Map(categoryDiscounts.map((rule) => [rule.category, Number(rule.discountPercent)]));
-      const allocations: { product: typeof products[number]; stockItemId: string; offerId: string; warehouseId: string; supplierId: string; supplierEmail: string; supplierSku: string; quantity: number; purchaseUnitPriceExclTax: string; purchaseVatRateSnapshot: string; discountPercent: number; unitNetMills: number; unitGrossMills: number }[] = [];
+      const allocations: { product: typeof products[number]; stockItemId: string | null; offerId: string | null; warehouseId: string | null; supplierId: string | null; supplierEmail: string | null; supplierSku: string; quantity: number; purchaseUnitPriceExclTax: string | null; purchaseVatRateSnapshot: string | null; discountPercent: number; unitNetMills: number; unitGrossMills: number }[] = [];
       for (const requested of payload.data.items) {
         const product = products.find((item) => item.id === requested.productId)!;
       const candidates = await tx.stockItem.findMany({ where: { offer: { productId: product.id, status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } } }, include: { offer: { select: { id: true, supplierSku: true, purchasePrice: true, purchaseVatRate: true, supplier: { select: { id: true, email: true } } } } }, orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }] });
         const available = candidates.map((item) => ({ item, quantity: Math.max(0, item.onHand - item.reserved - item.damaged) })).filter((entry) => entry.quantity > 0).sort((a, b) => b.quantity - a.quantity || a.item.id.localeCompare(b.item.id));
         const totalAvailable = available.reduce((sum, entry) => sum + entry.quantity, 0);
-        if (totalAvailable < requested.quantity) throw Object.assign(new Error(`Stock insuffisant pour « ${product.name} » : ${totalAvailable} disponible(s).`), { httpStatus: 409 });
+        const directAvailable = Math.max(0, product.directStock - product.directStockReserved - product.directStockDamaged);
+        const availableForOrder = product._count.supplierOffers > 0 ? totalAvailable : directAvailable;
+        if (availableForOrder < requested.quantity) throw Object.assign(new Error(`Stock insuffisant pour « ${product.name} » : ${availableForOrder} disponible(s).`), { httpStatus: 409 });
         const discountPercent = productDiscountMap.get(product.id) ?? (product.category ? categoryDiscountMap.get(product.category.trim().toLocaleLowerCase('fr-TN')) : undefined) ?? profileDiscount;
         const discountBasisPoints = Math.round(discountPercent * 100);
         const unitNetMills = Math.round(Math.round(Number(product.listPrice) * 1000) * (10000 - discountBasisPoints) / 10000);
         const unitGrossMills = Math.round(unitNetMills * (10000 + Math.round(Number(product.vatRate) * 100)) / 10000);
         let remaining = requested.quantity;
+        if (product._count.supplierOffers === 0) {
+          const reserved = await tx.product.updateMany({ where: { id: product.id, directStock: product.directStock, directStockReserved: { lte: product.directStock - product.directStockDamaged - requested.quantity } }, data: { directStockReserved: { increment: requested.quantity } } });
+          if (reserved.count !== 1) throw Object.assign(new Error('Le stock vient de changer. Actualisez le catalogue et réessayez.'), { httpStatus: 409 });
+          allocations.push({ product, stockItemId: null, offerId: null, warehouseId: null, supplierId: null, supplierEmail: null, supplierSku: product.sku, quantity: requested.quantity, purchaseUnitPriceExclTax: null, purchaseVatRateSnapshot: null, discountPercent, unitNetMills, unitGrossMills });
+          continue;
+        }
         for (const entry of available) {
           if (!remaining) break;
           const quantity = Math.min(remaining, entry.quantity);
@@ -2610,10 +2645,11 @@ app.post('/api/orders', optionalAuth, async (req: AuthenticatedRequest, res, nex
             unitPriceInclTax: (line.unitGrossMills / 1000).toFixed(3), lineSubtotalExclTax: (subtotal / 1000).toFixed(3), lineVat: ((total - subtotal) / 1000).toFixed(3), lineTotalInclTax: (total / 1000).toFixed(3) };
         }) },
       }, select: { id: true, orderNumber: true, invoiceNumber: true, invoiceIssuedAt: true, status: true, paymentMethod: true, paymentStatus: true, subtotalExclTax: true, vatTotal: true, totalInclTax: true, currency: true, createdAt: true, lines: { select: { id: true, productNameSnapshot: true, quantity: true, status: true, lineTotalInclTax: true } } } });
-      await tx.stockMovement.createMany({ data: allocations.map((line) => ({ stockItemId: line.stockItemId, warehouseId: line.warehouseId, offerId: line.offerId, type: 'RESERVATION' as const, quantity: line.quantity, reason: `Commande ${orderNumber}`, actorId: auditActorId })) });
+      const supplierAllocations = allocations.filter((line): line is typeof line & { stockItemId: string; warehouseId: string; offerId: string } => Boolean(line.stockItemId && line.warehouseId && line.offerId));
+      if (supplierAllocations.length) await tx.stockMovement.createMany({ data: supplierAllocations.map((line) => ({ stockItemId: line.stockItemId, warehouseId: line.warehouseId, offerId: line.offerId, type: 'RESERVATION' as const, quantity: line.quantity, reason: `Commande ${orderNumber}`, actorId: auditActorId })) });
       if (user) await enqueueNotification(tx, { userId: req.user!.sub, emailTo: user.email, eventKey: `order.created.customer:${created.id}`, title: 'Commande enregistrée', message: `Votre commande ${orderNumber} a été enregistrée. Son suivi est disponible dans votre espace client.`, link: '/' });
       else await enqueueNotification(tx, { userId: null, emailTo: payload.data.guestEmail!, eventKey: `order.created.guest:${created.id}`, title: 'Commande enregistrée · Ghorbel Automative Supply Group', message: `Votre commande ${orderNumber} est enregistrée. Le code privé de suivi (valable 30 jours) figure dans cet e-mail ; conservez-le pour consulter la commande sur notre site.`, emailSecretEncrypted: encryptEmailSecret(guestAccessToken!), link: '/' });
-      const suppliers = new Map(allocations.map((line) => [line.supplierId, line.supplierEmail]));
+      const suppliers = new Map(allocations.filter((line): line is typeof line & { supplierId: string; supplierEmail: string } => Boolean(line.supplierId && line.supplierEmail)).map((line) => [line.supplierId, line.supplierEmail]));
       for (const [supplierId, supplierEmail] of suppliers) await enqueueNotification(tx, { userId: supplierId, emailTo: supplierEmail, eventKey: `order.created.supplier:${created.id}:${supplierId}`, title: 'Nouvelle commande à préparer', message: `Des articles vous ont été attribués sur la commande ${orderNumber}. Connectez-vous à votre espace fournisseur pour la traiter.`, link: '/partner' });
       return created;
     }, { isolationLevel: 'Serializable', maxWait: 5000, timeout: 20000 });
@@ -2840,20 +2876,53 @@ app.patch('/api/partner/orders/lines/:id/status', requireAuth, requirePartner, a
   }
 });
 
+app.patch('/api/admin/orders/lines/:id/prepare', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const id = uuid.safeParse(req.params.id); const payload = z.object({ status: z.enum(['ACCEPTED', 'PREPARING']) }).strict().safeParse(req.body);
+  if (!id.success || !payload.success) return res.status(400).json({ error: 'Étape de préparation invalide.' });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const line = await tx.orderLine.findUnique({ where: { id: id.data }, select: { id: true, productId: true, supplierOfferId: true, supplierSkuSnapshot: true, status: true, productNameSnapshot: true, order: { select: { id: true, orderNumber: true, customerId: true, guestEmail: true, customer: { select: { email: true } } } } } });
+      if (!line) throw Object.assign(new Error('Ligne de commande introuvable.'), { httpStatus: 404 });
+      if (!line.productId || line.supplierOfferId || line.supplierSkuSnapshot === 'FOURNISSEUR_SUPPRIME') throw Object.assign(new Error('Cette ligne est gérée par un fournisseur.'), { httpStatus: 409 });
+      const expected = line.status === 'RESERVED' ? 'ACCEPTED' : line.status === 'ACCEPTED' ? 'PREPARING' : null;
+      if (payload.data.status !== expected) throw Object.assign(new Error('Cette étape a déjà été traitée ou ne respecte pas l’ordre de préparation.'), { httpStatus: 409 });
+      const changed = await tx.orderLine.updateMany({ where: { id: line.id, status: line.status, supplierOfferId: null }, data: { status: payload.data.status } });
+      if (!changed.count) throw Object.assign(new Error('La ligne a été modifiée simultanément.'), { httpStatus: 409 });
+      const statuses = (await tx.orderLine.findMany({ where: { orderId: line.order.id }, select: { status: true } })).map((item) => item.status);
+      const orderStatus = statuses.every((status) => status === 'DELIVERED') ? 'DELIVERED' : statuses.every((status) => status === 'SHIPPED' || status === 'DELIVERED') ? 'SHIPPED' : statuses.some((status) => status === 'SHIPPED' || status === 'DELIVERED') ? 'PARTIALLY_SHIPPED' : statuses.some((status) => status === 'ACCEPTED' || status === 'PREPARING') ? 'PROCESSING' : 'PLACED';
+      await tx.order.update({ where: { id: line.order.id }, data: { status: orderStatus } });
+      await recordAudit(tx, { actorId: req.user!.sub, action: payload.data.status === 'ACCEPTED' ? 'ADMIN_PRODUCT_ORDER_ACCEPTED' : 'ADMIN_PRODUCT_ORDER_PREPARED', entityType: 'ORDER_LINE', entityId: line.id, details: { orderNumber: line.order.orderNumber, product: line.productNameSnapshot, status: payload.data.status } });
+      const email = line.order.customer?.email ?? line.order.guestEmail;
+      if (email) await enqueueNotification(tx, { userId: line.order.customerId, emailTo: email, eventKey: `admin.ghorbelOrderLine:${line.id}:${payload.data.status}`, title: payload.data.status === 'ACCEPTED' ? 'Commande acceptée' : 'Pièce prête pour livraison', message: payload.data.status === 'ACCEPTED' ? `Votre commande ${line.order.orderNumber} a été acceptée par GHORBEL.` : `La pièce « ${line.productNameSnapshot} » de la commande ${line.order.orderNumber} est prête pour la livraison.`, link: '/' });
+      return { id: line.id, status: payload.data.status };
+    }, { isolationLevel: 'Serializable' });
+    return res.json({ data: result });
+  } catch (error) {
+    const status = (error as { httpStatus?: number }).httpStatus;
+    if (status) return res.status(status).json({ error: (error as Error).message });
+    if ((error as { code?: string }).code === 'P2034') return res.status(409).json({ error: 'La commande a changé simultanément. Actualisez puis réessayez.' });
+    next(error);
+  }
+});
+
 app.patch('/api/admin/orders/lines/:id/status', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
   const id = uuid.safeParse(req.params.id); const payload = z.object({ status: z.enum(['SHIPPED', 'DELIVERED']) }).strict().safeParse(req.body);
   if (!id.success || !payload.success) return res.status(400).json({ error: 'Étape de retrait ou de livraison invalide.' });
   try {
     const line = await prisma.$transaction(async (tx) => {
-      const current = await tx.orderLine.findUnique({ where: { id: id.data }, select: { id: true, orderId: true, quantity: true, status: true, productNameSnapshot: true, stockItemId: true, warehouseId: true, supplierOfferId: true, order: { select: { orderNumber: true, customerId: true, guestEmail: true, customer: { select: { email: true } } } } } });
+      const current = await tx.orderLine.findUnique({ where: { id: id.data }, select: { id: true, orderId: true, productId: true, supplierSkuSnapshot: true, quantity: true, status: true, productNameSnapshot: true, stockItemId: true, warehouseId: true, supplierOfferId: true, order: { select: { orderNumber: true, customerId: true, guestEmail: true, customer: { select: { email: true } } } } } });
       if (!current) throw Object.assign(new Error('Ligne de commande introuvable.'), { httpStatus: 404 });
       const nextStatus = current.status === 'PREPARING' ? 'SHIPPED' : current.status === 'SHIPPED' ? 'DELIVERED' : null;
       if (nextStatus !== payload.data.status) throw Object.assign(new Error('Le fournisseur doit d’abord préparer la pièce. Suivez les étapes de retrait et de livraison dans l’ordre.'), { httpStatus: 409 });
       if (payload.data.status === 'SHIPPED') {
-        if (!current.stockItemId || !current.warehouseId || !current.supplierOfferId) throw Object.assign(new Error('La réservation de stock de cette pièce est introuvable.'), { httpStatus: 409 });
-        const consumed = await tx.stockItem.updateMany({ where: { id: current.stockItemId, reserved: { gte: current.quantity }, onHand: { gte: current.quantity } }, data: { reserved: { decrement: current.quantity }, onHand: { decrement: current.quantity } } });
-        if (consumed.count !== 1) throw Object.assign(new Error('Le stock réservé ne correspond plus à la commande.'), { httpStatus: 409 });
-        await tx.stockMovement.create({ data: { stockItemId: current.stockItemId, warehouseId: current.warehouseId, offerId: current.supplierOfferId, type: 'SHIPMENT', quantity: -current.quantity, reason: `Retrait par Ghorbel Automative Supply Group · commande ${current.order.orderNumber}`, actorId: req.user!.sub } });
+        if (current.stockItemId && current.warehouseId && current.supplierOfferId) {
+          const consumed = await tx.stockItem.updateMany({ where: { id: current.stockItemId, reserved: { gte: current.quantity }, onHand: { gte: current.quantity } }, data: { reserved: { decrement: current.quantity }, onHand: { decrement: current.quantity } } });
+          if (consumed.count !== 1) throw Object.assign(new Error('Le stock réservé ne correspond plus à la commande.'), { httpStatus: 409 });
+          await tx.stockMovement.create({ data: { stockItemId: current.stockItemId, warehouseId: current.warehouseId, offerId: current.supplierOfferId, type: 'SHIPMENT', quantity: -current.quantity, reason: `Retrait par Ghorbel Automative Supply Group · commande ${current.order.orderNumber}`, actorId: req.user!.sub } });
+        } else if (current.productId && !current.supplierOfferId && current.supplierSkuSnapshot !== 'FOURNISSEUR_SUPPRIME') {
+          const consumed = await tx.product.updateMany({ where: { id: current.productId, directStockReserved: { gte: current.quantity }, directStock: { gte: current.quantity } }, data: { directStockReserved: { decrement: current.quantity }, directStock: { decrement: current.quantity } } });
+          if (consumed.count !== 1) throw Object.assign(new Error('Le stock GHORBEL réservé ne correspond plus à la commande.'), { httpStatus: 409 });
+        } else throw Object.assign(new Error('La réservation de stock de cette pièce est introuvable.'), { httpStatus: 409 });
       }
       const changed = await tx.orderLine.updateMany({ where: { id: current.id, status: current.status }, data: { status: payload.data.status } });
       if (!changed.count) throw Object.assign(new Error('La ligne de commande a été modifiée simultanément.'), { httpStatus: 409 });
@@ -3512,8 +3581,9 @@ app.get('/api/catalog/products/:id', optionalAuth, async (req: AuthenticatedRequ
       ]);
       if (productRule) discountPercent = Number(productRule.discountPercent); else if (categoryRule) discountPercent = Number(categoryRule.discountPercent);
     }
-    const { supplierOffers, ...publicProduct } = product;
-    const availableQuantity = supplierOffers.flatMap((offer) => offer.stockItems).reduce((sum, stock) => sum + Math.max(0, stock.onHand - stock.reserved - stock.damaged), 0);
+    const { supplierOffers, directStock, directStockReserved, directStockDamaged, ...publicProduct } = product;
+    const supplierQuantity = supplierOffers.flatMap((offer) => offer.stockItems).reduce((sum, stock) => sum + Math.max(0, stock.onHand - stock.reserved - stock.damaged), 0);
+    const availableQuantity = supplierOffers.length ? supplierQuantity : Math.max(0, directStock - directStockReserved - directStockDamaged);
     if (product.listPrice === null) return res.json({ data: { ...publicProduct, availableQuantity, pricing: null } });
     const baseMills = Math.round(Number(product.listPrice) * 1000);
     const netMills = Math.round(baseMills * (10000 - Math.round(discountPercent * 100)) / 10000);
@@ -3613,8 +3683,9 @@ app.get('/api/catalog/search', optionalAuth, async (req: AuthenticatedRequest, r
     const categoryDiscountMap = new Map(categoryDiscounts.map((rule) => [rule.category, Number(rule.discountPercent)]));
     const data = items.map((product) => {
       const effectiveDiscountPercent = productDiscountMap.get(product.id) ?? (product.category ? categoryDiscountMap.get(product.category.trim().toLocaleLowerCase('fr-TN')) : undefined) ?? discountPercent;
-      const { supplierOffers, ...publicProduct } = product;
-      const availableQuantity = supplierOffers.flatMap((offer) => offer.stockItems).reduce((sum, stock) => sum + Math.max(0, stock.onHand - stock.reserved - stock.damaged), 0);
+      const { supplierOffers, directStock, directStockReserved, directStockDamaged, ...publicProduct } = product;
+      const supplierQuantity = supplierOffers.flatMap((offer) => offer.stockItems).reduce((sum, stock) => sum + Math.max(0, stock.onHand - stock.reserved - stock.damaged), 0);
+      const availableQuantity = supplierOffers.length ? supplierQuantity : Math.max(0, directStock - directStockReserved - directStockDamaged);
       if (product.listPrice === null) return { ...publicProduct, availableQuantity, pricing: null };
       const baseMills = Math.round(Number(product.listPrice) * 1000);
       const discountBasisPoints = Math.round(effectiveDiscountPercent * 100);
