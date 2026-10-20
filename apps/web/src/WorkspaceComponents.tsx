@@ -448,8 +448,8 @@ function PricingManagement() {
 type CustomerOrder = { id: string; orderNumber: string; status: string; paymentMethod: string; paymentStatus: string; transferReference?: string | null; paymentProofs?: { id: string; fileName: string; mimeType: string; fileSize: number; createdAt: string }[]; currency: string; subtotalExclTax: string | number; vatTotal: string | number; totalInclTax: string | number; createdAt: string; guestAccessToken?: string; lines: { id: string; quantity: number; status: string; productNameSnapshot: string; carrierName?: string | null; trackingReference?: string | null; trackingUrl?: string | null; lineTotalInclTax: string | number }[] };
 type DeliveryAddress = { id: string; label: string; recipientName: string; phone: string; address: string; city: string; isDefault: boolean };
 
-function OrderCenter({ cart, setCart, onClose, onLogin, signedIn }: { cart: CartLine[]; setCart: (cart: CartLine[]) => void; onClose: () => void; onLogin: () => void; signedIn: boolean }) {
-  const [view, setView] = useState<'cart' | 'orders' | 'addresses'>('cart');
+function OrderCenter({ cart, setCart, initialView = 'cart', onClose, onLogin, signedIn }: { cart: CartLine[]; setCart: (cart: CartLine[]) => void; initialView?: 'cart' | 'orders' | 'addresses'; onClose: () => void; onLogin: () => void; signedIn: boolean }) {
+  const [view, setView] = useState<'cart' | 'orders' | 'addresses'>(initialView);
   const [paymentMethod, setPaymentMethod] = useState<'CASH_ON_DELIVERY' | 'BANK_TRANSFER'>('CASH_ON_DELIVERY');
   const [bankDetails, setBankDetails] = useState<BankTransferDetails | null>(null);
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
