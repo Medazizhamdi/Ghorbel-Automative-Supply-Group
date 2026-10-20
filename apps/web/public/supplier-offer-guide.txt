@@ -2,7 +2,7 @@ GHORBEL — IMPORT DES OFFRES FOURNISSEUR / REVENDEUR
 ===================================================
 
 Le fichier supplier-offer-template.csv utilise le point-virgule (;) comme séparateur, pour Excel en français.
-Gardez la première ligne d’en-têtes intacte et saisissez une offre par ligne. Les colonnes facultatives peuvent rester vides.
+La ligne sep=; indique à Excel le séparateur : conservez-la. Gardez la deuxième ligne d’en-têtes intacte puis saisissez une offre par ligne. Les colonnes facultatives peuvent rester vides.
 
 COLONNES OBLIGATOIRES
 - supplierSku : votre référence fournisseur, unique dans votre catalogue.

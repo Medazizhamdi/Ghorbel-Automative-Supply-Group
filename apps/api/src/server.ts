@@ -3111,6 +3111,7 @@ const parseCsv = (input: string, delimiter: string): string[][] => {
   if (quoted) throw new Error('Le fichier contient un guillemet CSV non fermé.');
   row.push(cell);
   if (row.some((value) => value.trim() !== '')) rows.push(row);
+  if (rows[0]?.length === 2 && /^sep=$/i.test(rows[0][0].replace(/^\uFEFF/, '').trim()) && rows[0][1].trim() === '') rows.shift();
   return rows;
 };
 const MAX_CATALOG_IMPORT_BYTES = 2_000_000;

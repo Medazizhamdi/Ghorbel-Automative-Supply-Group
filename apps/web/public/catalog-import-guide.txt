@@ -2,7 +2,7 @@ GHORBEL — IMPORT DU CATALOGUE DE PIÈCES
 ========================================
 
 Le fichier catalog-import-template.csv utilise le point-virgule (;) comme séparateur, pour une ouverture correcte dans Excel en français.
-La première ligne contient les noms techniques des colonnes : ne la modifiez pas et conservez leur orthographe.
+La ligne sep=; indique à Excel le séparateur : conservez-la. La deuxième ligne contient les noms techniques des colonnes : ne la modifiez pas et gardez leur orthographe.
 Ajoutez les pièces à partir de la ligne 2. Les cellules facultatives peuvent rester vides.
 
 COLONNES OBLIGATOIRES

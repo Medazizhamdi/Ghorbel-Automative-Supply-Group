@@ -2,7 +2,7 @@ GHORBEL — IMPORT DU RÉFÉRENTIEL DE VÉHICULES
 =============================================
 
 Le fichier vehicle-catalog-import-template.csv utilise le point-virgule (;) comme séparateur, pour Excel en français.
-Gardez la première ligne d’en-têtes intacte et ajoutez un véhicule par ligne. Les données moteur et version sont facultatives.
+La ligne sep=; indique à Excel le séparateur : conservez-la. Gardez la deuxième ligne d’en-têtes intacte puis ajoutez un véhicule par ligne. Les données moteur et version sont facultatives.
 
 COLONNES OBLIGATOIRES
 - make : marque, par exemple Volkswagen.
