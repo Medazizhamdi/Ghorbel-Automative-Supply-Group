@@ -1,6 +1,6 @@
 # Données automobiles importées
 
-Ce répertoire contient l’instantané `vehicle-makes-models.json` version 1.0.2 (commit `ee99776`), importé dans PostgreSQL par `prisma/import-vehicle-catalog.ts`.
+Ce répertoire contient l’instantané `vehicle-makes-models.json.gz` version 1.0.2 (commit `ee99776`), importé dans PostgreSQL par `prisma/import-vehicle-catalog.ts`. Le script décompresse automatiquement l’instantané gzip avant l’import.
 
 **Attribution requise :** vehicle-makes-models et Autoevolution, source amont des marques, modèles, générations et motorisations. Projet source : <https://github.com/gor3a/vehicle-makes-models>. Les données sont distribuées sous **Open Database License (ODbL) v1.0** : <https://opendatacommons.org/licenses/odbl/1-0/>.
 

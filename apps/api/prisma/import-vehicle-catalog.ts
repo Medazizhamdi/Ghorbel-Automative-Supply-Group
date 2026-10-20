@@ -1,5 +1,6 @@
 import { PrismaClient, DataStatus } from '@prisma/client';
 import { readFile } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
 try { process.loadEnvFile('../../.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -15,8 +16,9 @@ type SourceMake = { name: string; models: SourceModel[] };
 type SourceGroup = { makes: SourceMake[] };
 
 async function main() {
-  const jsonPath = path.resolve(process.cwd(), 'data/vehicle-makes-models.json');
-  const sourceData = JSON.parse(await readFile(jsonPath, 'utf8')) as SourceGroup[];
+  const jsonPath = path.resolve(process.cwd(), 'data/vehicle-makes-models.json.gz');
+  const compressedSource = await readFile(jsonPath);
+  const sourceData = JSON.parse(gunzipSync(compressedSource).toString('utf8')) as SourceGroup[];
   let makeCount = 0; let modelCount = 0; let generationCount = 0; let engineCount = 0; let variantCount = 0;
   for (const makeEntry of sourceData.flatMap((group) => group.makes)) {
     const makeSlug = slugify(makeEntry.name);
