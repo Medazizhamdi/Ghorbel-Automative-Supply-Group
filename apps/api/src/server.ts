@@ -1129,12 +1129,19 @@ app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next)
   if (!search.success || !includeArchived.success) return res.status(400).json({ error: 'Recherche produit invalide.' });
   try {
     const [products, settings, categoryMargins] = await Promise.all([
-      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { where: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } }, orderBy: [{ purchasePrice: 'asc' }, { createdAt: 'asc' }], take: 1, select: { purchasePrice: true } } }, orderBy: { name: 'asc' }, take: 250 }),
+      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { orderBy: { createdAt: 'asc' }, select: { purchasePrice: true, status: true, archivedAt: true, supplier: { select: { id: true, companyName: true, firstName: true, lastName: true, email: true, status: true } } } } }, orderBy: { name: 'asc' }, take: 250 }),
       prisma.companySettings.findUnique({ where: { id: 'default' }, select: { defaultMarginPercent: true } }),
       prisma.categoryMargin.findMany({ select: { category: true, marginPercent: true } }),
     ]);
     const margins = new Map(categoryMargins.map((rule) => [normalizeCategory(rule.category), Number(rule.marginPercent)]));
-    return res.json({ data: products.map(({ supplierOffers, _count, ...product }) => ({ ...product, hasPartnerOffer: _count.supplierOffers > 0, lowestSupplierCost: supplierOffers[0]?.purchasePrice ?? null, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) })) });
+    return res.json({ data: products.map(({ supplierOffers, _count, ...product }) => {
+      const partners = new Map<string, { id: string; name: string; email: string }>();
+      for (const { supplier } of supplierOffers) if (supplier) partners.set(supplier.id, { id: supplier.id, name: supplier.companyName || `${supplier.firstName} ${supplier.lastName}`.trim(), email: supplier.email });
+      const partnerSuppliers = [...partners.values()];
+      const activeApprovedOffers = supplierOffers.filter((offer) => offer.status === 'APPROVED' && !offer.archivedAt && offer.supplier?.status === 'ACTIVE');
+      const lowestSupplierCost = activeApprovedOffers.sort((a, b) => Number(a.purchasePrice) - Number(b.purchasePrice))[0]?.purchasePrice ?? null;
+      return { ...product, hasPartnerOffer: _count.supplierOffers > 0, partnerSuppliers, lowestSupplierCost, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) };
+    }) });
   } catch (error) { next(error); }
 });
 
