@@ -65,10 +65,14 @@ const deliverEmailOutbox = async () => {
       const attempt = item.emailAttempts + 1;
       try {
         const baseUrl = process.env.WEB_ORIGIN?.split(',')[0]?.trim().replace(/\/$/, '');
-        const href = item.link && baseUrl ? `${baseUrl}${item.link}` : undefined;
+        const isPasswordReset = item.eventKey.startsWith('password.reset:');
         const emailSecret = item.emailSecretEncrypted ? decryptEmailSecret(item.emailSecretEncrypted) : null;
-        const secretText = emailSecret ? `\n\nCode privé de suivi (valable 30 jours) : ${emailSecret}\nConservez-le avec votre numéro de commande.` : '';
-        const secretHtml = emailSecret ? `<p style="padding:14px;background:#eef5ff;border-radius:8px"><strong>Code privé de suivi (valable 30 jours)</strong><br><code>${escapeHtml(emailSecret)}</code><br>Conservez-le avec votre numéro de commande.</p>` : '';
+        const href = isPasswordReset
+          ? (baseUrl && emailSecret ? `${baseUrl}/reset-password?token=${encodeURIComponent(emailSecret)}` : undefined)
+          : (item.link && baseUrl ? `${baseUrl}${item.link}` : undefined);
+        if (isPasswordReset && !href) throw new Error('Lien de réinitialisation indisponible ; vérifiez WEB_ORIGIN et le jeton e-mail.');
+        const secretText = emailSecret && !isPasswordReset ? `\n\nCode privé de suivi (valable 30 jours) : ${emailSecret}\nConservez-le avec votre numéro de commande.` : '';
+        const secretHtml = emailSecret && !isPasswordReset ? `<p style="padding:14px;background:#eef5ff;border-radius:8px"><strong>Code privé de suivi (valable 30 jours)</strong><br><code>${escapeHtml(emailSecret)}</code><br>Conservez-le avec votre numéro de commande.</p>` : '';
         let orderSummaryText = '';
         let orderSummaryHtml = '';
         let attachments: { filename: string; content: Buffer; contentType: string }[] = [];
@@ -277,6 +281,61 @@ app.post('/api/auth/login', authRateLimit, async (req, res, next) => {
     if (user.status !== 'ACTIVE') return res.status(403).json({ error: user.status === 'PENDING' ? 'Compte en attente de validation.' : 'Compte suspendu.' });
     return res.json({ token: signToken({ sub: user.id, role: user.role }), expiresIn: 43200, user: { id: user.id, email: user.email, phone: user.phone, firstName: user.firstName, lastName: user.lastName, role: user.role, companyName: user.companyName } });
   } catch (error) { next(error); }
+});
+
+app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
+  const parsed = z.object({ email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()) }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Adresse e-mail invalide.' });
+  try {
+    const user = await prisma.user.findUnique({ where: { email: parsed.data.email }, select: { id: true, email: true, role: true, status: true } });
+    // Keep the response identical for unknown, inactive, and admin accounts.
+    if (user && user.role !== 'ADMIN' && user.status === 'ACTIVE') {
+      const rawToken = randomBytes(32).toString('base64url');
+      const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+      const now = new Date();
+      await prisma.$transaction(async (tx) => {
+        await tx.passwordResetToken.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: now } });
+        await tx.passwordResetToken.create({ data: { userId: user.id, tokenHash, expiresAt: new Date(now.getTime() + 30 * 60_000) } });
+        await enqueueNotification(tx, {
+          userId: user.id,
+          emailTo: user.email,
+          eventKey: `password.reset:${randomUUID()}`,
+          title: 'Réinitialisation de votre mot de passe',
+          message: 'Une demande de réinitialisation a été effectuée pour votre compte. Utilisez le bouton ci-dessous dans les 30 minutes. Si vous n’êtes pas à l’origine de cette demande, ignorez cet e-mail.',
+          link: '/reset-password',
+          emailSecretEncrypted: encryptEmailSecret(rawToken),
+        });
+      });
+    }
+    return res.json({ message: 'Si cette adresse correspond à un compte éligible, un lien de réinitialisation sera envoyé par e-mail.' });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/auth/reset-password', authRateLimit, async (req, res, next) => {
+  const parsed = z.object({ token: z.string().min(32).max(128), password: z.string().min(8).max(128) }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Le lien est invalide ou le nouveau mot de passe ne respecte pas les critères requis (8 à 128 caractères).' });
+  try {
+    const tokenHash = createHash('sha256').update(parsed.data.token).digest('hex');
+    const token = await prisma.passwordResetToken.findUnique({ where: { tokenHash }, select: { id: true, userId: true, expiresAt: true, usedAt: true, user: { select: { role: true, status: true } } } });
+    const now = new Date();
+    if (!token || token.usedAt || token.expiresAt <= now || token.user.role === 'ADMIN' || token.user.status !== 'ACTIVE') {
+      return res.status(400).json({ error: 'Lien de réinitialisation invalide ou expiré.' });
+    }
+    const newPasswordHash = await passwordHash(parsed.data.password);
+    const changed = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.passwordResetToken.updateMany({ where: { id: token.id, usedAt: null, expiresAt: { gt: now } }, data: { usedAt: now } });
+      if (claimed.count !== 1) return false;
+      const updated = await tx.user.updateMany({ where: { id: token.userId, role: { not: 'ADMIN' }, status: 'ACTIVE' }, data: { passwordHash: newPasswordHash } });
+      if (updated.count !== 1) throw new Error('RESET_ACCOUNT_INELIGIBLE');
+      await tx.passwordResetToken.updateMany({ where: { userId: token.userId, usedAt: null }, data: { usedAt: now } });
+      return true;
+    });
+    if (!changed) return res.status(400).json({ error: 'Lien de réinitialisation invalide ou expiré.' });
+    return res.json({ message: 'Mot de passe modifié. Vous pouvez maintenant vous connecter.' });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'RESET_ACCOUNT_INELIGIBLE') return res.status(400).json({ error: 'Lien de réinitialisation invalide ou expiré.' });
+    next(error);
+  }
 });
 
 app.post('/api/auth/bootstrap-admin', authRateLimit, async (req, res, next) => {

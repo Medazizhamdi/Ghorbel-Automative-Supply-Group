@@ -162,6 +162,7 @@ model User {
   partnerMessages          PartnerConversationMessage[] @relation("PartnerMessageSender")
   contactMessages          ContactMessage[] @relation("ContactMessageSender")
   contactReplies           ContactMessageReply[]
+  passwordResetTokens      PasswordResetToken[]
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
 
@@ -751,6 +752,18 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([emailStatus, emailNextAttemptAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, expiresAt])
 }
 
 model ProductReference {
