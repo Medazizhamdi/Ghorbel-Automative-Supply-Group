@@ -66,6 +66,9 @@ const deliverEmailOutbox = async () => {
       try {
         const baseUrl = process.env.WEB_ORIGIN?.split(',')[0]?.trim().replace(/\/$/, '');
         const isPasswordReset = item.eventKey.startsWith('password.reset:');
+        const isCustomerWelcome = item.eventKey.startsWith('welcome.customer:');
+        const isPartnerWelcome = item.eventKey.startsWith('welcome.partner.');
+        const isWelcome = isCustomerWelcome || isPartnerWelcome;
         const emailSecret = item.emailSecretEncrypted ? decryptEmailSecret(item.emailSecretEncrypted) : null;
         const href = isPasswordReset
           ? (baseUrl && emailSecret ? `${baseUrl}/reset-password?token=${encodeURIComponent(emailSecret)}` : undefined)
@@ -90,7 +93,11 @@ const deliverEmailOutbox = async () => {
           orderSummaryHtml = `<h3>Résumé de la commande ${escapeHtml(order.orderNumber)}</h3><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f2f6fc"><th style="padding:9px;text-align:left">Désignation / référence</th><th style="padding:9px">Qté</th><th style="padding:9px;text-align:right">PU HT</th><th style="padding:9px">TVA</th><th style="padding:9px;text-align:right">Total TTC</th></tr></thead><tbody>${rowsHtml}</tbody></table><div style="margin:16px 0 22px auto;max-width:260px"><p>Total HT : <strong>${amount(order.subtotalExclTax)}</strong></p><p>TVA : <strong>${amount(order.vatTotal)}</strong></p><p style="font-size:18px">Total TTC : <strong>${amount(order.totalInclTax)}</strong></p></div><p>La facture ${escapeHtml(order.invoiceNumber)} est jointe à cet e-mail.</p>`;
           attachments = [{ filename: `${order.invoiceNumber}.pdf`, content: Buffer.from(order.invoicePdf), contentType: 'application/pdf' }];
         }
-        const html = `<div style="font-family:Arial,sans-serif;color:#18304c;max-width:700px;margin:auto"><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message)}</p>${orderSummaryHtml}${secretHtml}${href ? `<p><a href="${escapeHtml(href)}" style="color:#1263dc">Ouvrir mon espace Ghorbel Automative Supply Group</a></p>` : ''}<hr><small>Ghorbel Automative Supply Group</small></div>`;
+        const welcomeGreeting = item.message.split('\n')[0] || 'Bienvenue';
+        const welcomeContent = item.message.split('\n\n').slice(1).join('\n\n') || item.message;
+        const welcomeButton = href ? `<a href="${escapeHtml(href)}" style="display:inline-block;padding:14px 23px;border-radius:7px;background:#1263dc;color:#fff;text-decoration:none;font-weight:bold">${isPartnerWelcome ? 'Accéder à mon espace partenaire' : 'Découvrir le catalogue'}</a>` : '';
+        const welcomeHtml = `<div style="margin:0;padding:32px 12px;background:#f1f5fb;font-family:Arial,Helvetica,sans-serif;color:#19324e"><table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:620px;margin:auto;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden"><tr><td style="padding:25px 32px;background:#0d2b4e;color:#fff"><div style="font-size:12px;letter-spacing:2px;font-weight:bold;color:#82c8ff">GHORBEL</div><div style="margin-top:5px;font-size:11px;letter-spacing:1px;color:#d8e8f8">AUTOMATIVE SUPPLY GROUP</div></td></tr><tr><td style="padding:34px 32px 14px"><div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#1263dc;font-weight:bold">${isPartnerWelcome ? 'Bienvenue dans notre réseau professionnel' : 'Bienvenue chez Ghorbel'}</div><h1 style="margin:12px 0 15px;font-size:27px;line-height:1.2;color:#132a46">${escapeHtml(welcomeGreeting)}</h1><p style="margin:0;color:#53677e;font-size:15px;line-height:1.75">${escapeHtml(welcomeContent).replace(/\n/g, '<br>')}</p><div style="margin:27px 0">${welcomeButton}</div>${isPartnerWelcome ? '<div style="padding:14px 16px;border-radius:8px;background:#f3f7fc;color:#61748a;font-size:12px;line-height:1.6">Votre adresse e-mail est votre identifiant de connexion. Pour votre sécurité, le mot de passe initial vous est communiqué séparément par l’administration.</div>' : '<div style="padding:14px 16px;border-radius:8px;background:#f3f7fc;color:#61748a;font-size:12px;line-height:1.6">Gardez cet e-mail pour retrouver facilement votre espace et vos prochaines commandes.</div>'}</td></tr><tr><td style="padding:18px 32px;border-top:1px solid #e8eef5;color:#8291a2;font-size:11px;line-height:1.6">Une question ? Écrivez à <a href="mailto:ghorbelautomotivesupplygroup@gmail.com" style="color:#1263dc">ghorbelautomotivesupplygroup@gmail.com</a><br>© Ghorbel Automative Supply Group · Tunisie</td></tr></table></div>`;
+        const html = isWelcome ? welcomeHtml : `<div style="font-family:Arial,sans-serif;color:#18304c;max-width:700px;margin:auto"><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message)}</p>${orderSummaryHtml}${secretHtml}${href ? `<p><a href="${escapeHtml(href)}" style="color:#1263dc">Ouvrir mon espace Ghorbel Automative Supply Group</a></p>` : ''}<hr><small>Ghorbel Automative Supply Group</small></div>`;
         await emailDelivery.send({ to: item.emailTo, subject: item.title, text: `${item.message}${orderSummaryText}${secretText}${href ? `\n\n${href}` : ''}`, html, attachments, messageId: `<${createHash('sha256').update(item.eventKey).digest('hex')}@autopieces360>` });
         await prisma.notification.update({ where: { id: item.id }, data: { emailStatus: 'SENT', emailSentAt: new Date(), emailLockedAt: null, emailLastError: null, emailSecretEncrypted: null } });
       } catch (error) {
@@ -264,7 +271,11 @@ app.post('/api/auth/register', authRateLimit, async (req, res, next) => {
   if (!parsed.success) return res.status(400).json({ error: 'Informations de compte invalides.', details: parsed.error.flatten() });
   try {
     const { password, ...data } = parsed.data;
-    const user = await prisma.user.create({ data: { ...data, passwordHash: await passwordHash(password), role: 'CUSTOMER', status: 'ACTIVE' }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, role: true, status: true } });
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({ data: { ...data, passwordHash: await passwordHash(password), role: 'CUSTOMER', status: 'ACTIVE' }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, role: true, status: true } });
+      await enqueueNotification(tx, { userId: created.id, emailTo: created.email, eventKey: `welcome.customer:${created.id}`, title: 'Bienvenue chez Ghorbel Automative Supply Group', message: `Bonjour ${created.firstName},\n\nVotre compte client est prêt. Vous pouvez parcourir le catalogue, rechercher les pièces compatibles avec votre véhicule et retrouver vos commandes depuis votre espace.`, link: '/' });
+      return created;
+    });
     return res.status(201).json({ data: user, message: 'Compte client créé.' });
   } catch (error) {
     if ((error as { code?: string }).code === 'P2002') return res.status(409).json({ error: 'Cette adresse e-mail est déjà utilisée.' });
@@ -993,6 +1004,8 @@ app.post('/api/admin/accounts', requireAuth, requireAdmin, async (req: Authentic
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({ data: { ...data, passwordHash: await passwordHash(password), status: 'ACTIVE' }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, companyName: true, role: true, status: true, createdAt: true } });
       await recordAudit(tx, { actorId: req.user!.sub, action: 'PARTNER_ACCOUNT_CREATED', entityType: 'USER', entityId: created.id, details: { role: created.role, companyName: created.companyName ?? '' } });
+      const partnerType = created.role === 'SUPPLIER' ? 'fournisseur' : 'revendeur';
+      await enqueueNotification(tx, { userId: created.id, emailTo: created.email, eventKey: `welcome.partner.${created.role.toLowerCase()}:${created.id}`, title: 'Bienvenue dans le réseau partenaire GHORBEL', message: `Bonjour ${created.firstName},\n\nVotre compte ${partnerType} pour ${created.companyName} est actif. Connectez-vous à votre espace partenaire pour gérer votre activité et retrouver les commandes qui vous sont attribuées.`, link: '/partner' });
       return created;
     });
     return res.status(201).json({ data: user, message: 'Compte partenaire créé. Remettez les identifiants au partenaire par un canal privé.' });
