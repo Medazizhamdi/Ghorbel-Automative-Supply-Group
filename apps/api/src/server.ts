@@ -2175,6 +2175,12 @@ const placeOrderSchema = z.object({
 
 const guestLookupSchema = z.object({ orderNumber: z.string().trim().regex(/^AP-[0-9]{8}-[A-F0-9]{6}$/), accessToken: z.string().min(40).max(80) }).strict();
 type InvoiceLine = { name: string; reference: string; quantity: number; unitPriceExclTax: number; vatRate: number; lineSubtotalExclTax?: number; lineVat?: number };
+const ghorbelLegalDetails = [
+  'Siège social : Immeuble Le Palace, App. A 3-71',
+  'Centre Urbain Nord, 1082 Tunis',
+  'Identifiant unique : 1733668Z',
+  'Matricule fiscal : 1733668Z/A/M/000',
+];
 const cp1252Special = new Map(Object.entries({ '€': 128, '‚': 130, 'ƒ': 131, '„': 132, '…': 133, '†': 134, '‡': 135, 'ˆ': 136, '‰': 137, 'Š': 138, '‹': 139, 'Œ': 140, 'Ž': 142, '‘': 145, '’': 146, '“': 147, '”': 148, '•': 149, '–': 150, '—': 151, '˜': 152, '™': 153, 'š': 154, '›': 155, 'œ': 156, 'ž': 158, 'Ÿ': 159 }));
 const pdfClean = (value: string) => [...value].map((character) => {
   let code = cp1252Special.get(character) ?? character.codePointAt(0) ?? 63;
@@ -2192,7 +2198,7 @@ const wrapPdfText = (value: string, maxChars: number) => {
   if (line) lines.push(line);
   return lines.length > 2 ? [lines[0], `${lines[1].slice(0, Math.max(0, maxChars - 3))}...`] : lines;
 };
-const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt: Date; issuer: string; issuerContact?: string; recipient: string; recipientContact?: string; orderNumber: string; paymentLabel: string; lines: InvoiceLine[] }) => {
+const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt: Date; issuer: string; issuerContact?: string; issuerLegalDetails?: string[]; recipient: string; recipientContact?: string; recipientLegalDetails?: string[]; orderNumber: string; paymentLabel: string; lines: InvoiceLine[] }) => {
   const subtotalMills = input.lines.reduce((sum, line) => sum + (line.lineSubtotalExclTax === undefined ? Math.round(line.unitPriceExclTax * 1000) * line.quantity : Math.round(line.lineSubtotalExclTax * 1000)), 0);
   const vatByRate = new Map<number, number>();
   for (const line of input.lines) {
@@ -2226,23 +2232,27 @@ const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt:
       ops.push(pdfText(392, 790, `N° ${input.invoiceNumber}`, 10, 'F2'));
       ops.push(pdfText(392, 772, `Date : ${input.issuedAt.toISOString().slice(0, 10)}`, 9));
       ops.push(pdfText(392, 754, `Commande : ${input.orderNumber}`, 9));
-      ops.push(pdfRect(40, 670, 250, 65, '0.96 0.98 1'));
-      ops.push(pdfRect(305, 670, 250, 65, '0.96 0.98 1'));
+      ops.push(pdfRect(40, 620, 250, 115, '0.96 0.98 1'));
+      ops.push(pdfRect(305, 620, 250, 115, '0.96 0.98 1'));
       ops.push(pdfText(52, 718, 'EMETTEUR', 8, 'F2', '0.04 0.36 0.86'));
       ops.push(pdfText(52, 701, input.issuer, 10, 'F2'));
-      if (input.issuerContact) ops.push(pdfText(52, 684, input.issuerContact.slice(0, 60), 8));
+      let issuerDetailY = 684;
+      if (input.issuerContact) { ops.push(pdfText(52, issuerDetailY, input.issuerContact.slice(0, 60), 8)); issuerDetailY -= 10; }
+      input.issuerLegalDetails?.forEach((detail) => { ops.push(pdfText(52, issuerDetailY, detail, 6.7)); issuerDetailY -= 9; });
       ops.push(pdfText(317, 718, 'CLIENT', 8, 'F2', '0.04 0.36 0.86'));
       ops.push(pdfText(317, 701, input.recipient, 10, 'F2'));
-      if (input.recipientContact) ops.push(pdfText(317, 684, input.recipientContact.slice(0, 60), 8));
-      ops.push(pdfText(42, 647, `Paiement : ${input.paymentLabel}`, 9, 'F2'));
-      ops.push(pdfText(42, 625, 'DETAIL DES ARTICLES', 9, 'F2', '0.04 0.36 0.86'));
-      ops.push(pdfRect(40, 586, 515, 27, '0.04 0.19 0.39'));
-      ops.push(pdfText(49, 596, 'Désignation', 8, 'F2', '1 1 1'));
-      ops.push(pdfText(252, 596, 'Référence', 8, 'F2', '1 1 1'));
-      ops.push(pdfText(376, 596, 'Qté', 8, 'F2', '1 1 1'));
-      ops.push(pdfText(420, 596, 'PU HT (TND)', 7.5, 'F2', '1 1 1'));
-      ops.push(pdfText(506, 596, 'TVA', 8, 'F2', '1 1 1'));
-      return { ops, y: 586, bottom: 180 };
+      let recipientDetailY = 684;
+      if (input.recipientContact) { ops.push(pdfText(317, recipientDetailY, input.recipientContact.slice(0, 60), 8)); recipientDetailY -= 10; }
+      input.recipientLegalDetails?.forEach((detail) => { ops.push(pdfText(317, recipientDetailY, detail, 6.7)); recipientDetailY -= 9; });
+      ops.push(pdfText(42, 610, `Paiement : ${input.paymentLabel}`, 9, 'F2'));
+      ops.push(pdfText(42, 590, 'DETAIL DES ARTICLES', 9, 'F2', '0.04 0.36 0.86'));
+      ops.push(pdfRect(40, 550, 515, 27, '0.04 0.19 0.39'));
+      ops.push(pdfText(49, 560, 'Désignation', 8, 'F2', '1 1 1'));
+      ops.push(pdfText(252, 560, 'Référence', 8, 'F2', '1 1 1'));
+      ops.push(pdfText(376, 560, 'Qté', 8, 'F2', '1 1 1'));
+      ops.push(pdfText(420, 560, 'PU HT (TND)', 7.5, 'F2', '1 1 1'));
+      ops.push(pdfText(506, 560, 'TVA', 8, 'F2', '1 1 1'));
+      return { ops, y: 550, bottom: 180 };
     }
     ops.push(pdfText(42, 792, 'FACTURE · SUITE', 12, 'F2', '0.04 0.16 0.34'));
     ops.push(pdfText(42, 772, `${input.invoiceNumber} · Commande ${input.orderNumber}`, 9));
@@ -2315,7 +2325,7 @@ const standardInvoiceDocument = async (input: { invoiceNumber: string; issuedAt:
   return Buffer.concat(chunks);
 };
 const orderDocument = (order: { orderNumber: string; invoiceNumber?: string | null; invoiceIssuedAt?: Date | null; createdAt: Date; deliveryName: string; deliveryPhone: string; deliveryAddress: string; deliveryCity: string; paymentMethod: string; paymentStatus: string; subtotalExclTax: Prisma.Decimal; vatTotal: Prisma.Decimal; totalInclTax: Prisma.Decimal; lines: { productNameSnapshot: string; productSkuSnapshot: string; quantity: number; unitPriceExclTax: Prisma.Decimal; vatRateSnapshot: Prisma.Decimal; lineSubtotalExclTax: Prisma.Decimal; lineVat: Prisma.Decimal; lineTotalInclTax: Prisma.Decimal }[] }) => standardInvoiceDocument({
-  invoiceNumber: order.invoiceNumber || `FACT-${order.orderNumber}`, issuedAt: order.invoiceIssuedAt || order.createdAt,
+  invoiceNumber: order.invoiceNumber || `FACT-${order.orderNumber}`, issuedAt: order.invoiceIssuedAt || order.createdAt, issuerLegalDetails: ghorbelLegalDetails,
   issuer: 'Ghorbel Automative Supply Group', recipient: order.deliveryName, recipientContact: `${order.deliveryPhone} · ${order.deliveryAddress}, ${order.deliveryCity}`,
   orderNumber: order.orderNumber, paymentLabel: `${order.paymentMethod === 'CASH_ON_DELIVERY' ? 'A la livraison' : 'Virement bancaire'} · ${order.paymentStatus}`,
   lines: order.lines.map((line) => ({ name: line.productNameSnapshot, reference: line.productSkuSnapshot, quantity: line.quantity, unitPriceExclTax: Number(line.unitPriceExclTax), vatRate: Number(line.vatRateSnapshot), lineSubtotalExclTax: Number(line.lineSubtotalExclTax), lineVat: Number(line.lineVat) })),
@@ -2638,7 +2648,7 @@ app.post('/api/orders', optionalAuth, async (req: AuthenticatedRequest, res, nex
       const orderNumber = `AP-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID().slice(0, 6).toUpperCase()}`;
       const invoiceNumber = `FACT-${orderNumber}`;
       const invoiceIssuedAt = new Date();
-      const invoicePdf = await standardInvoiceDocument({ invoiceNumber, issuedAt: invoiceIssuedAt, issuer: 'Ghorbel Automative Supply Group', recipient: payload.data.deliveryName, recipientContact: `${payload.data.deliveryPhone} · ${payload.data.deliveryAddress}, ${payload.data.deliveryCity}`, orderNumber, paymentLabel: payload.data.paymentMethod === 'CASH_ON_DELIVERY' ? 'A la livraison' : 'Virement bancaire', lines: allocations.map((line) => { const lineSubtotal = line.unitNetMills * line.quantity; const lineTotal = line.unitGrossMills * line.quantity; return { name: line.product.name, reference: line.product.sku, quantity: line.quantity, unitPriceExclTax: line.unitNetMills / 1000, vatRate: Number(line.product.vatRate), lineSubtotalExclTax: lineSubtotal / 1000, lineVat: (lineTotal - lineSubtotal) / 1000 }; }) });
+      const invoicePdf = await standardInvoiceDocument({ invoiceNumber, issuedAt: invoiceIssuedAt, issuer: 'Ghorbel Automative Supply Group', issuerLegalDetails: ghorbelLegalDetails, recipient: payload.data.deliveryName, recipientContact: `${payload.data.deliveryPhone} · ${payload.data.deliveryAddress}, ${payload.data.deliveryCity}`, orderNumber, paymentLabel: payload.data.paymentMethod === 'CASH_ON_DELIVERY' ? 'A la livraison' : 'Virement bancaire', lines: allocations.map((line) => { const lineSubtotal = line.unitNetMills * line.quantity; const lineTotal = line.unitGrossMills * line.quantity; return { name: line.product.name, reference: line.product.sku, quantity: line.quantity, unitPriceExclTax: line.unitNetMills / 1000, vatRate: Number(line.product.vatRate), lineSubtotalExclTax: lineSubtotal / 1000, lineVat: (lineTotal - lineSubtotal) / 1000 }; }) });
       const created = await tx.order.create({ data: {
         orderNumber, invoiceNumber, invoiceIssuedAt, invoicePdf, customerId: req.user?.sub ?? null, guestEmail: req.user ? null : payload.data.guestEmail!, guestAccessTokenHash, guestAccessExpiresAt, paymentMethod: payload.data.paymentMethod, deliveryName: payload.data.deliveryName, deliveryPhone: payload.data.deliveryPhone,
         deliveryAddress: payload.data.deliveryAddress, deliveryCity: payload.data.deliveryCity, customerNote: payload.data.customerNote,
@@ -2781,7 +2791,7 @@ app.post('/api/partner/orders/:orderId/invoices/generate', requireAuth, requireP
     const supplierName = supplier.companyName || `${supplier.firstName} ${supplier.lastName}`.trim();
     const pdf = await standardInvoiceDocument({
       invoiceNumber: payload.data.invoiceNumber, issuedAt: new Date(), issuer: supplierName, issuerContact: supplier.email,
-      recipient: 'Ghorbel Automative Supply Group', orderNumber: order.orderNumber,
+      recipient: 'Ghorbel Automative Supply Group', recipientLegalDetails: ghorbelLegalDetails, orderNumber: order.orderNumber,
       paymentLabel: 'Facturation fournisseur de la commande · règlement selon les conditions convenues avec GHORBEL',
       lines: supplierInvoiceLines(lines),
     });
