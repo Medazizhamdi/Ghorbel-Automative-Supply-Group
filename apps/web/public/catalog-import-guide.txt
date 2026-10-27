@@ -3,7 +3,7 @@ GHORBEL — IMPORT DU CATALOGUE DE PIÈCES
 
 Le fichier catalog-import-template.csv utilise le point-virgule (;) comme séparateur, pour une ouverture correcte dans Excel en français.
 La ligne sep=; indique à Excel le séparateur : conservez-la. La deuxième ligne contient les noms techniques des colonnes : ne la modifiez pas et gardez leur orthographe.
-Ajoutez les pièces à partir de la ligne 2. Les cellules facultatives peuvent rester vides.
+Ajoutez les pièces à partir de la ligne 3. Les cellules facultatives peuvent rester vides.
 
 COLONNES OBLIGATOIRES
 - sku : référence interne unique de la pièce.
@@ -15,6 +15,9 @@ INFORMATIONS DE LA PIÈCE
 - description : description courte.
 - reference : référence OEM ou équivalente.
 - referenceType : OEM ou ALTERNATIVE (OEM par défaut).
+- images : URL HTTPS d'une photo; pour plusieurs photos, séparez les URL avec | (8 maximum).
+- priceHT : prix de vente client hors taxes en TND (facultatif, positif, 3 décimales maximum). Le renseigner fixe le prix en mode manuel et remplace la marge configurée.
+- stock : quantité disponible gérée directement par GHORBEL (entier de 0 à 1 000 000). Cette colonne ne modifie pas le stock des pièces partenaires.
 
 COMPATIBILITÉ VÉHICULE (FACULTATIVE)
 Si une compatibilité est renseignée, make, model, generation et yearFrom sont obligatoires ensemble.
@@ -34,4 +37,4 @@ RÈGLES DE SAISIE
 - L’import commence par une prévisualisation. Vérifiez toutes les erreurs avant de confirmer.
 
 EXEMPLE DE LIGNE (à copier dans Excel; supprimez-la avant un import réel)
-P-100;Filtre à huile;Filtration;Bosch;Filtre moteur;0986AF1234;OEM;Volkswagen;Golf;Golf VII;2012;2020;1.6 TDI;CAYC;Diesel;1598;77;Trendline;Hayon;Manuelle;Traction;Catalogue constructeur;https://exemple.tn/source;false
+P-100;Filtre à huile;Filtration;Bosch;Filtre moteur;0986AF1234;OEM;https://example.com/photo-filtre.jpg;24.900;12;Volkswagen;Golf;Golf VII;2012;2020;1.6 TDI;CAYC;Diesel;1598;77;Trendline;Hayon;Manuelle;Traction;Catalogue constructeur;https://exemple.tn/source;false

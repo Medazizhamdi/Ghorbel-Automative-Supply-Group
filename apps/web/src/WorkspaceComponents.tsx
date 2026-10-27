@@ -170,10 +170,12 @@ function AdminProductCatalog() {
   const token = sessionStorage.getItem('ap360-token') || '';
   const [products, setProducts] = useState<AdminCatalogProduct[]>([]);
   const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editing, setEditing] = useState<AdminCatalogProduct | null>(null);
   const [editingImages, setEditingImages] = useState<string[]>([]);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
   const headers = { Authorization: `Bearer ${token}` };
   const load = async () => {
@@ -181,6 +183,7 @@ function AdminProductCatalog() {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Chargement du catalogue impossible.');
     setProducts(result.data);
+    setSelectedIds([]);
   };
   useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : 'API indisponible.')); }, [search]);
   const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
@@ -224,11 +227,33 @@ function AdminProductCatalog() {
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Publication impossible.'); }
     finally { setBusy(''); }
   };
+  const selectAllVisible = products.length > 0 && products.every((product) => selectedIds.includes(product.id));
+  const toggleAllVisible = () => setSelectedIds(selectAllVisible ? [] : products.map((product) => product.id));
+  const deleteProducts = async (allDirect = false) => {
+    const ids = selectedIds;
+    if (!allDirect && !ids.length) return;
+    const confirmation = allDirect
+      ? 'Supprimer définitivement toutes les pièces gérées directement par GHORBEL ? Les pièces partenaires seront conservées. Les commandes garderont leurs désignations et montants enregistrés.'
+      : `Supprimer définitivement les ${ids.length} pièce(s) sélectionnée(s) ? Les pièces partenaires seront protégées. Les commandes garderont leurs désignations et montants enregistrés.`;
+    if (!window.confirm(confirmation)) return;
+    setBusy('bulk-delete'); setError(''); setMessage('');
+    try {
+      const response = await fetch(`${API}/api/admin/products/bulk`, { method: 'DELETE', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(allDirect ? { allDirect: true } : { ids }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Suppression impossible.');
+      setMessage(result.message || 'Suppression terminée.');
+      setSelectedIds([]);
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Suppression impossible.'); }
+    finally { setBusy(''); }
+  };
   return <section className="admin-section" id="admin-product-catalog"><div className="admin-audit-heading"><div><h3>Catalogue des pièces</h3><p className="auth-intro">Modifiez les fiches, leurs photos, et retirez du catalogue public sans effacer l’historique des commandes.</p></div><button className="partner-secondary-action" onClick={() => void load()} disabled={busy !== ''}>Actualiser</button></div>
     <label className="admin-audit-filter">Rechercher une pièce<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom ou référence SKU" maxLength={100}/></label>
     {error && <div className="auth-alert error">{error}</div>}
+    {message && <div className="auth-alert success">{message}</div>}
+    <div className="admin-catalog-bulk"><label><input type="checkbox" checked={selectAllVisible} disabled={!products.length || busy !== ''} onChange={toggleAllVisible}/> Tout sélectionner parmi les résultats ({products.length})</label><span>{selectedIds.length} sélectionnée(s)</span><div><button type="button" className="partner-secondary-action" disabled={!selectedIds.length || busy !== ''} onClick={() => void deleteProducts()}>Supprimer la sélection</button><button type="button" className="decline" disabled={busy !== ''} onClick={() => void deleteProducts(true)}>Supprimer tout</button></div><small>« Supprimer tout » efface définitivement les pièces gérées par GHORBEL. Les pièces liées à des offres partenaires sont protégées.</small></div>
     {editing && <form className="partner-create-form admin-catalog-edit" onSubmit={(event) => void saveEdit(event)}><strong>Modifier « {editing.name} »</strong><div className="partner-create-grid"><label>Référence catalogue<input name="sku" required maxLength={100} defaultValue={editing.sku}/></label><label>Nom de la pièce<input name="name" required minLength={2} maxLength={180} defaultValue={editing.name}/></label><label>Catégorie<input name="category" maxLength={100} defaultValue={editing.category || ''}/></label><label>Marque de la pièce<input name="pieceBrand" maxLength={100} defaultValue={editing.pieceBrand || ''}/></label>{!editing.hasPartnerOffer && <><label>Prix de vente HT (TND)<input name="listPrice" type="number" min="0.001" step="0.001" defaultValue={editing.listPrice ?? ''} placeholder="Optionnel"/><small>Prix client GHORBEL modifiable directement ici.</small></label><label>Stock disponible GHORBEL<input name="availableQuantity" type="number" min="0" max="1000000" step="1" defaultValue={editing.availableQuantity ?? 0}/><small>Stock géré directement par GHORBEL, sans entrepôt.</small></label></>}<label className="company-payment-instructions">Description<textarea name="description" maxLength={5000} defaultValue={editing.description || ''}/></label><PartnerPhotoUpload endpoint="/api/admin/uploads/images" value={editingImages} onChange={setEditingImages} onUploading={setPhotoUploading}/></div>{editing.hasPartnerOffer && <small>Pièce partenaire : le fournisseur garde la gestion de son prix d’achat et de son stock dans son entrepôt. Le prix client est déterminé par la marge GHORBEL, dans « Prix et marges ».</small>}<div className="admin-actions"><button type="button" className="partner-secondary-action" onClick={() => setEditing(null)}>Annuler</button><button disabled={busy === editing.id || photoUploading}>{photoUploading ? 'Envoi des photos…' : busy === editing.id ? 'Enregistrement…' : 'Enregistrer les modifications'}</button></div></form>}
-    {!products.length ? <div className="admin-empty">Aucune pièce ne correspond à la recherche.</div> : <div className="admin-list">{products.map((product) => <article className="admin-account" key={product.id}><div><strong>{product.name} · {product.sku}</strong><span>{product.category || 'Sans catégorie'} · {product.status === 'VERIFIED' ? 'Publiée' : 'Démonstration'}{product.hasPartnerOffer ? ' · Partenaire' : ' · GHORBEL'}{product.archivedAt ? ' · Archivée' : ''}</span>{product.partnerSuppliers.map((partner) => <small key={partner.id}>Proposée par : {partner.name} · {partner.email}</small>)}{!product.hasPartnerOffer && <small>Stock GHORBEL : {product.availableQuantity ?? 0} disponible(s) · sans entrepôt</small>}<small>{product.listPrice == null ? 'Prix à confirmer' : `${Number(product.listPrice).toFixed(3)} TND HT · TVA 19 % (Taux normal)`}</small></div><div className="admin-actions">{!product.hasPartnerOffer && !product.archivedAt && <button className="partner-secondary-action" disabled={busy !== ''} onClick={() => void togglePublication(product)}>{busy === product.id ? 'Mise à jour…' : product.status === 'VERIFIED' ? 'Dépublier' : 'Publier'}</button>}<button className="partner-secondary-action" disabled={busy !== ''} onClick={() => { setEditing(product); setEditingImages(product.images || []); }}>Modifier</button><button className={product.archivedAt ? '' : 'decline'} disabled={busy === product.id} onClick={() => void toggle(product)}>{busy === product.id ? 'Mise à jour…' : product.archivedAt ? 'Rétablir' : 'Archiver'}</button></div></article>)}</div>}
+    {!products.length ? <div className="admin-empty">Aucune pièce ne correspond à la recherche.</div> : <div className="admin-list">{products.map((product) => <article className="admin-account" key={product.id}><div><label className="admin-catalog-select"><input type="checkbox" checked={selectedIds.includes(product.id)} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, product.id] : current.filter((id) => id !== product.id))}/> Sélectionner</label><strong>{product.name} · {product.sku}</strong><span>{product.category || 'Sans catégorie'} · {product.status === 'VERIFIED' ? 'Publiée' : 'Démonstration'}{product.hasPartnerOffer ? ' · Partenaire' : ' · GHORBEL'}{product.archivedAt ? ' · Archivée' : ''}</span>{product.partnerSuppliers.map((partner) => <small key={partner.id}>Proposée par : {partner.name} · {partner.email}</small>)}{!product.hasPartnerOffer && <small>Stock GHORBEL : {product.availableQuantity ?? 0} disponible(s) · sans entrepôt</small>}<small>{product.listPrice == null ? 'Prix à confirmer' : `${Number(product.listPrice).toFixed(3)} TND HT · TVA 19 % (Taux normal)`}</small></div><div className="admin-actions">{!product.hasPartnerOffer && !product.archivedAt && <button className="partner-secondary-action" disabled={busy !== ''} onClick={() => void togglePublication(product)}>{busy === product.id ? 'Mise à jour…' : product.status === 'VERIFIED' ? 'Dépublier' : 'Publier'}</button>}<button className="partner-secondary-action" disabled={busy !== ''} onClick={() => { setEditing(product); setEditingImages(product.images || []); }}>Modifier</button><button className={product.archivedAt ? '' : 'decline'} disabled={busy === product.id} onClick={() => void toggle(product)}>{busy === product.id ? 'Mise à jour…' : product.archivedAt ? 'Rétablir' : 'Archiver'}</button></div></article>)}</div>}
     {products.length === 250 && <small>Affichage limité à 250 pièces. Utilisez la recherche pour affiner.</small>}
   </section>;
 }

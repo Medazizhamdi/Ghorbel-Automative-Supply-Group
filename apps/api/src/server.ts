@@ -1151,6 +1151,33 @@ app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next)
   } catch (error) { next(error); }
 });
 
+const adminBulkProductDeletePayload = z.object({ ids: z.array(z.string().uuid()).min(1).max(250).optional(), allDirect: z.literal(true).optional() }).strict().refine((value) => Boolean(value.ids) !== Boolean(value.allDirect), 'Choisissez une sélection de pièces ou la suppression globale des pièces GHORBEL.');
+app.delete('/api/admin/products/bulk', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const payload = adminBulkProductDeletePayload.safeParse(req.body);
+  if (!payload.success) return res.status(400).json({ error: 'Sélection de suppression invalide.', details: payload.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const where = payload.data.allDirect ? { supplierOffers: { none: {} } } : { id: { in: payload.data.ids! }, supplierOffers: { none: {} } };
+      const candidates = await tx.product.findMany({ where, select: { id: true, sku: true, images: true } });
+      const protectedCount = payload.data.allDirect
+        ? await tx.product.count({ where: { supplierOffers: { some: {} } } })
+        : Math.max(0, payload.data.ids!.length - candidates.length);
+      const deleted = candidates.length ? await tx.product.deleteMany({ where: { id: { in: candidates.map((product) => product.id) }, supplierOffers: { none: {} } } }) : { count: 0 };
+      if (deleted.count) await recordAudit(tx, { actorId: req.user!.sub, action: 'ADMIN_PRODUCTS_BULK_DELETED', entityType: 'PRODUCT_CATALOG', entityId: randomUUID(), details: { deletedCount: deleted.count, protectedCount, scope: payload.data.allDirect ? 'all_direct_ghorbel_products' : 'selected_products', skus: candidates.map((product) => product.sku).slice(0, 250) } });
+      return { deletedCount: deleted.count, protectedCount, images: candidates.flatMap((product) => product.images) };
+    }, { isolationLevel: 'Serializable', maxWait: 5000, timeout: 30000 });
+    for (const image of new Set(result.images)) {
+      const filename = /^\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp))$/i.exec(image)?.[1];
+      if (!filename || await prisma.product.count({ where: { images: { has: image } } })) continue;
+      await unlink(path.resolve(uploadsDirectory, filename)).catch(() => undefined);
+    }
+    return res.json({ data: { deletedCount: result.deletedCount, protectedCount: result.protectedCount }, message: `${result.deletedCount} pièce(s) supprimée(s) définitivement.${result.protectedCount ? ` ${result.protectedCount} pièce(s) partenaire protégée(s) et conservée(s).` : ''}` });
+  } catch (error) {
+    if ((error as { code?: string }).code === 'P2034') return res.status(409).json({ error: 'Le catalogue a changé simultanément. Actualisez puis réessayez.' });
+    next(error);
+  }
+});
+
 const adminProductStockPayload = z.object({ availableQuantity: z.coerce.number().int().min(0).max(1000000) }).strict();
 app.patch('/api/admin/products/:id/stock', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
   const id = uuid.safeParse(req.params.id); const payload = adminProductStockPayload.safeParse(req.body);
@@ -3084,7 +3111,7 @@ app.patch('/api/admin/orders/:id/payment', requireAuth, requireAdmin, async (req
 });
 
 type CatalogCsvRow = {
-  line: number; sku: string; name: string; description?: string; category?: string; pieceBrand?: string; reference?: string;
+  line: number; sku: string; name: string; description?: string; category?: string; pieceBrand?: string; reference?: string; images?: string[]; priceHT?: number; stock?: number;
   referenceType: 'OEM' | 'ALTERNATIVE'; make?: string; model?: string; generation?: string; yearFrom?: number; yearTo?: number;
   engine?: string; engineCode?: string; fuel?: string; displacementCc?: number; powerKw?: number;
   variant?: string; bodyStyle?: string; transmission?: string; drivetrain?: string;
@@ -3147,6 +3174,12 @@ const parseCatalogCsv = (input: string): CatalogCsvRow[] => {
     const sku = value('sku') ?? ''; const name = value('name') ?? '';
     if (!sku) errors.push('SKU obligatoire.');
     if (!name) errors.push('Nom de la pièce obligatoire.');
+    const images = value('images')?.split('|').map((image) => image.trim()).filter(Boolean);
+    if (images && images.length > 8) errors.push('La colonne images accepte au maximum 8 URL par pièce.');
+    if (images?.some((image) => image.length > 2000 || !z.string().url().safeParse(image).success || !image.toLowerCase().startsWith('https://'))) errors.push('Chaque image doit être une URL HTTPS valide (2 000 caractères maximum).');
+    const priceHT = number('priceht'); const stock = number('stock');
+    if (priceHT !== undefined && (!Number.isFinite(priceHT) || priceHT <= 0 || priceHT > 100000000 || Math.round(priceHT * 1000) !== priceHT * 1000)) errors.push('priceHT doit être un prix HT positif, avec au maximum 3 décimales.');
+    if (stock !== undefined && (!Number.isInteger(stock) || stock < 0 || stock > 1000000)) errors.push('stock doit être un entier entre 0 et 1 000 000.');
     if (verifiedRaw && !['true','1','yes','oui','verified','verifie','vérifié'].includes(verifiedRaw) && !['false','0','no','non',''].includes(verifiedRaw)) errors.push('verified doit être true ou false.');
     const make = value('make'); const model = value('model'); const generation = value('generation');
     const yearFrom = number('yearfrom'); const yearTo = number('yearto');
@@ -3174,7 +3207,7 @@ const parseCatalogCsv = (input: string): CatalogCsvRow[] => {
         }
       }
     }
-    return { line: index + 2, sku, name, description, category, pieceBrand, reference: value('reference'), referenceType, make, model, generation, yearFrom, yearTo, engine: value('engine'), engineCode: value('enginecode'), fuel: value('fuel'), displacementCc, powerKw, variant: value('variant'), bodyStyle: value('bodystyle'), transmission: value('transmission'), drivetrain: value('drivetrain'), source: value('source'), sourceReference: value('sourcereference'), verified, errors } satisfies CatalogCsvRow;
+    return { line: index + 2, sku, name, description, category, pieceBrand, reference: value('reference'), images, priceHT, stock, referenceType, make, model, generation, yearFrom, yearTo, engine: value('engine'), engineCode: value('enginecode'), fuel: value('fuel'), displacementCc, powerKw, variant: value('variant'), bodyStyle: value('bodystyle'), transmission: value('transmission'), drivetrain: value('drivetrain'), source: value('source'), sourceReference: value('sourcereference'), verified, errors } satisfies CatalogCsvRow;
   });
   return parsed;
 };
@@ -3228,7 +3261,7 @@ app.post('/api/admin/catalog/imports/preview', requireAuth, requireAdmin, async 
     const rejectedRows = rows.length - acceptedRows;
     const report = rows.filter((row) => row.errors.length).map(({ line, sku, errors }) => ({ line, sku, errors }));
     const job = await prisma.importJob.create({ data: { uploadedById: req.user!.sub, fileName: input.data.fileName, rawCsv: input.data.csv, rowCount: rows.length, acceptedRows, rejectedRows, report } });
-    return res.status(201).json({ data: { jobId: job.id, fileName: job.fileName, rowCount: job.rowCount, acceptedRows, rejectedRows, previewTruncated: rows.length > 50, rows: rows.slice(0, 50).map(({ line, sku, name, make, model, generation, yearFrom, yearTo, engine, engineCode, fuel, displacementCc, powerKw, variant, bodyStyle, transmission, drivetrain, source, sourceReference, verified, errors }) => ({ line, sku, name, make, model, generation, yearFrom, yearTo, engine, engineCode, fuel, displacementCc, powerKw, variant, bodyStyle, transmission, drivetrain, source, sourceReference, verified, errors })) } });
+    return res.status(201).json({ data: { jobId: job.id, fileName: job.fileName, rowCount: job.rowCount, acceptedRows, rejectedRows, previewTruncated: rows.length > 50, rows: rows.slice(0, 50).map(({ line, sku, name, images, priceHT, stock, make, model, generation, yearFrom, yearTo, engine, engineCode, fuel, displacementCc, powerKw, variant, bodyStyle, transmission, drivetrain, source, sourceReference, verified, errors }) => ({ line, sku, name, images, priceHT, stock, make, model, generation, yearFrom, yearTo, engine, engineCode, fuel, displacementCc, powerKw, variant, bodyStyle, transmission, drivetrain, source, sourceReference, verified, errors })) } });
   } catch (error) {
     if (error instanceof Error && !(error instanceof z.ZodError)) return res.status(400).json({ error: error.message });
     next(error);
@@ -3297,8 +3330,10 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
             }
           }
           const pricingMode = await pricingModeForNewProduct(tx, row.category);
-          const existingProduct = await tx.product.findUnique({ where: { sku: row.sku }, select: { id: true, _count: { select: { supplierOffers: true } } } });
-          const product = await tx.product.upsert({ where: { sku: row.sku }, update: { name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, ...(existingProduct && existingProduct._count.supplierOffers > 0 ? {} : { status: DataStatus.VERIFIED }) }, create: { sku: row.sku, name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, status: DataStatus.VERIFIED, pricingMode } });
+          const existingProduct = await tx.product.findUnique({ where: { sku: row.sku }, select: { id: true, directStockReserved: true, directStockDamaged: true, _count: { select: { supplierOffers: true } } } });
+          if (existingProduct?._count.supplierOffers && (row.priceHT !== undefined || row.stock !== undefined)) throw new Error('Les colonnes priceHT et stock ne peuvent modifier que les pièces gérées directement par GHORBEL, pas les pièces partenaires.');
+          const importPricingMode = row.priceHT !== undefined ? 'MANUAL' as const : pricingMode;
+          const product = await tx.product.upsert({ where: { sku: row.sku }, update: { name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, ...(row.images ? { images: row.images } : {}), ...(row.priceHT !== undefined ? { listPrice: row.priceHT.toFixed(3), pricingMode: 'MANUAL' as const, marginPercent: null } : {}), ...(row.stock !== undefined ? { directStock: row.stock + (existingProduct?.directStockReserved ?? 0) + (existingProduct?.directStockDamaged ?? 0) } : {}), ...(existingProduct && existingProduct._count.supplierOffers > 0 ? {} : { status: DataStatus.VERIFIED }) }, create: { sku: row.sku, name: row.name, description: row.description, category: row.category, pieceBrand: row.pieceBrand, images: row.images ?? [], ...(row.priceHT !== undefined ? { listPrice: row.priceHT.toFixed(3) } : {}), directStock: row.stock ?? 0, status: DataStatus.VERIFIED, pricingMode: importPricingMode } });
           const now = row.verified ? new Date() : null;
           const normalizedReference = row.reference ? normalizeReference(row.reference) : undefined;
           if (row.reference && normalizedReference) await tx.productReference.upsert({ where: { normalized_productId: { normalized: normalizedReference, productId: product.id } }, update: { value: row.reference, type: row.referenceType, source: row.source, verifiedAt: row.verified ? now : undefined }, create: { productId: product.id, value: row.reference, normalized: normalizedReference, type: row.referenceType, source: row.source, verifiedAt: now } });
