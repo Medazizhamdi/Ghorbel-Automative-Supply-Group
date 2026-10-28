@@ -1572,7 +1572,7 @@ const upsertVehicleTaxonomy = async (tx: Prisma.TransactionClient, input: Manual
   let model = await tx.vehicleModel.findUnique({ where: { makeId_slug: { makeId: make.id, slug: modelSlug } } });
   if (!model) model = await tx.vehicleModel.create({ data: { makeId: make.id, name: input.modelName, slug: modelSlug, category: input.vehicleCategory || 'Voiture particulière', status, source, sourceReference } });
   else model = await tx.vehicleModel.update({ where: { id: model.id }, data: { name: model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.modelName, category: model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.vehicleCategory || model.category, status: nextVehicleStatus(model.status, status), ...(model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? {} : { source, sourceReference }) } });
-  const yearTo = input.yearTo ?? input.yearFrom;
+  const yearTo = input.yearTo ?? null;
   let generation = await tx.vehicleGeneration.findFirst({ where: { modelId: model.id, name: input.generationName, yearFrom: input.yearFrom, yearTo } });
   if (!generation) generation = await tx.vehicleGeneration.create({ data: { modelId: model.id, name: input.generationName, yearFrom: input.yearFrom, yearTo, status, source, sourceReference } });
   else generation = await tx.vehicleGeneration.update({ where: { id: generation.id }, data: { status: nextVehicleStatus(generation.status, status), ...(generation.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? {} : { source, sourceReference }) } });
@@ -3308,24 +3308,29 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
         await prisma.$transaction(async (tx) => {
           let generationId: string | undefined; let engineId: string | undefined; let variantId: string | undefined;
           if (row.make && row.model && row.generation && row.yearFrom) {
-            const dataStatus = row.verified ? DataStatus.VERIFIED : DataStatus.DEMONSTRATION;
+            const dataStatus = row.verified ? DataStatus.VERIFIED : DataStatus.CONTRIBUTED;
             const makeSlug = slugify(row.make); const modelSlug = slugify(row.model);
             const make = await tx.vehicleMake.upsert({ where: { slug: makeSlug }, update: { name: row.make, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { name: row.make, slug: makeSlug, status: dataStatus } });
+            if (!row.verified && make.status === DataStatus.DEMONSTRATION) await tx.vehicleMake.update({ where: { id: make.id }, data: { status: DataStatus.CONTRIBUTED } });
             const model = await tx.vehicleModel.upsert({ where: { makeId_slug: { makeId: make.id, slug: modelSlug } }, update: { name: row.model, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { makeId: make.id, name: row.model, slug: modelSlug, status: dataStatus } });
+            if (!row.verified && model.status === DataStatus.DEMONSTRATION) await tx.vehicleModel.update({ where: { id: model.id }, data: { status: DataStatus.CONTRIBUTED } });
             let generation = await tx.vehicleGeneration.findFirst({ where: { modelId: model.id, name: row.generation, yearFrom: row.yearFrom, yearTo: row.yearTo ?? null } });
             if (!generation) generation = await tx.vehicleGeneration.create({ data: { modelId: model.id, name: row.generation, yearFrom: row.yearFrom, yearTo: row.yearTo, status: dataStatus } });
             else if (row.verified && generation.status !== DataStatus.VERIFIED) generation = await tx.vehicleGeneration.update({ where: { id: generation.id }, data: { status: DataStatus.VERIFIED } });
+            else if (!row.verified && generation.status === DataStatus.DEMONSTRATION) generation = await tx.vehicleGeneration.update({ where: { id: generation.id }, data: { status: DataStatus.CONTRIBUTED } });
             generationId = generation.id;
             if (row.engine || row.engineCode) {
               let engine = await tx.engine.findFirst({ where: { generationId, name: row.engine ?? row.engineCode!, engineCode: row.engineCode ?? null } });
               if (!engine) engine = await tx.engine.create({ data: { generationId, name: row.engine ?? row.engineCode!, engineCode: row.engineCode, fuel: row.fuel, displacementCc: row.displacementCc, powerKw: row.powerKw, status: dataStatus } });
               else if (row.verified || row.fuel || row.displacementCc || row.powerKw) engine = await tx.engine.update({ where: { id: engine.id }, data: { fuel: row.fuel, displacementCc: row.displacementCc, powerKw: row.powerKw, ...(row.verified ? { status: DataStatus.VERIFIED } : {}) } });
+              if (!row.verified && engine.status === DataStatus.DEMONSTRATION) engine = await tx.engine.update({ where: { id: engine.id }, data: { status: DataStatus.CONTRIBUTED } });
               engineId = engine.id;
             }
             if (row.variant) {
               let variant = await tx.vehicleVariant.findFirst({ where: { generationId, name: row.variant, engineId: engineId ?? null } });
               if (!variant) variant = await tx.vehicleVariant.create({ data: { generationId, name: row.variant, engineId, bodyStyle: row.bodyStyle, transmission: row.transmission, drivetrain: row.drivetrain, status: dataStatus } });
               else if (row.verified || row.bodyStyle || row.transmission || row.drivetrain) variant = await tx.vehicleVariant.update({ where: { id: variant.id }, data: { bodyStyle: row.bodyStyle, transmission: row.transmission, drivetrain: row.drivetrain, ...(row.verified ? { status: DataStatus.VERIFIED } : {}) } });
+              if (!row.verified && variant.status === DataStatus.DEMONSTRATION) variant = await tx.vehicleVariant.update({ where: { id: variant.id }, data: { status: DataStatus.CONTRIBUTED } });
               variantId = variant.id;
             }
           }
@@ -3359,6 +3364,54 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
       return updated;
     });
     return res.json({ data: completed });
+  } catch (error) {
+    if (error instanceof Error && !(error instanceof z.ZodError)) return res.status(400).json({ error: error.message });
+    next(error);
+  }
+});
+
+app.post('/api/admin/catalog/imports/:id/repair-fitments', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const id = uuid.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Identifiant d’import invalide.' });
+  try {
+    const job = await prisma.importJob.findUnique({ where: { id: id.data } });
+    if (!job || job.fileName.startsWith('VEHICLE_CATALOG:')) return res.status(404).json({ error: 'Import de pièces introuvable.' });
+    if (job.status !== 'COMPLETED') return res.status(409).json({ error: 'Seuls les imports terminés peuvent être réparés.' });
+    const rows = parseCatalogCsv(job.rawCsv).filter((row) => row.errors.length === 0 && row.make && row.model && row.generation && row.yearFrom);
+    let linkedRows = 0;
+    let createdCompatibilities = 0;
+    for (const row of rows) {
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          const product = await tx.product.findUnique({ where: { sku: row.sku }, select: { id: true } });
+          if (!product) return 'missing' as const;
+          const source = row.source || `Import CSV à vérifier · ${job.fileName}`;
+          const taxonomy = await upsertVehicleTaxonomy(tx, {
+            mode: 'manual', makeName: row.make!, modelName: row.model!, generationName: row.generation!,
+            vehicleCategory: row.category, yearFrom: row.yearFrom!, yearTo: row.yearTo,
+            engineName: row.engine, engineCode: row.engineCode, fuel: row.fuel, displacementCc: row.displacementCc, powerKw: row.powerKw,
+            variantName: row.variant, bodyStyle: row.bodyStyle, transmission: row.transmission, drivetrain: row.drivetrain,
+          }, row.verified ? DataStatus.VERIFIED : DataStatus.CONTRIBUTED, source, row.sourceReference);
+          const where = { productId: product.id, generationId: taxonomy.generationId, engineId: taxonomy.engineId ?? null, variantId: taxonomy.variantId ?? null, yearFrom: row.yearFrom!, yearTo: row.yearTo ?? null };
+          const existing = await tx.vehicleCompatibility.findFirst({ where });
+          const verifiedAt = row.verified && row.source ? new Date() : existing?.verifiedAt ?? null;
+          if (existing) {
+            await tx.vehicleCompatibility.update({ where: { id: existing.id }, data: { source, sourceReference: row.sourceReference, verifiedAt } });
+            return 'existing' as const;
+          }
+          await tx.vehicleCompatibility.create({ data: { ...where, source, sourceReference: row.sourceReference, verifiedAt } });
+          return 'created' as const;
+        });
+        if (result === 'created') { linkedRows += 1; createdCompatibilities += 1; }
+        else if (result === 'existing') linkedRows += 1;
+      } catch (error) {
+        console.error(`Échec réparation compatibilité import ligne ${row.line}:`, error);
+      }
+    }
+    await prisma.$transaction(async (tx) => {
+      await recordAudit(tx, { actorId: req.user!.sub, action: 'CATALOG_IMPORT_FITMENTS_REPAIRED', entityType: 'IMPORT_JOB', entityId: job.id, details: { fileName: job.fileName, rowsWithFitment: rows.length, linkedRows, createdCompatibilities } });
+    });
+    return res.json({ data: { rowsWithFitment: rows.length, linkedRows, createdCompatibilities, message: `${linkedRows} compatibilité(s) liées; ${createdCompatibilities} ajoutée(s).` } });
   } catch (error) {
     if (error instanceof Error && !(error instanceof z.ZodError)) return res.status(400).json({ error: error.message });
     next(error);
