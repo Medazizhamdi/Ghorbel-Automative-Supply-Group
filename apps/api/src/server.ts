@@ -118,7 +118,7 @@ const deliverEmailOutbox = async () => {
 
 app.disable('x-powered-by');
 app.use(helmet());
-app.use(cors({ origin: webOrigins, methods: ['GET', 'POST', 'PATCH', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Bootstrap-Key'] }));
+app.use(cors({ origin: webOrigins, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Bootstrap-Key'] }));
 app.use(express.json({ limit: '8mb' }));
 app.use('/uploads', express.static(uploadsDirectory, {
   fallthrough: false,
