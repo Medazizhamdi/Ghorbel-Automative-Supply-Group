@@ -1131,11 +1131,16 @@ app.patch('/api/admin/accounts/:id/pricing-profile', requireAuth, requireAdmin, 
 
 app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next) => {
   const search = z.string().trim().max(100).optional().safeParse(req.query.search);
+  const productId = uuid.optional().safeParse(req.query.productId);
   const includeArchived = z.enum(['true', 'false']).default('false').safeParse(req.query.includeArchived);
-  if (!search.success || !includeArchived.success) return res.status(400).json({ error: 'Recherche produit invalide.' });
+  const page = z.coerce.number().int().min(1).default(1).safeParse(req.query.page);
+  const pageSize = z.coerce.number().int().min(1).max(100).default(20).safeParse(req.query.pageSize);
+  if (!search.success || !productId.success || !includeArchived.success || !page.success || !pageSize.success) return res.status(400).json({ error: 'Recherche produit invalide.' });
   try {
-    const [products, settings, categoryMargins] = await Promise.all([
-      prisma.product.findMany({ where: { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' } }, { sku: { contains: search.data, mode: 'insensitive' } }] } : {}) }, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, directStock: true, directStockReserved: true, directStockDamaged: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { orderBy: { createdAt: 'asc' }, select: { purchasePrice: true, status: true, archivedAt: true, supplier: { select: { id: true, companyName: true, firstName: true, lastName: true, email: true, status: true } } } } }, orderBy: { name: 'asc' }, take: 250 }),
+    const where = { ...(includeArchived.data === 'true' ? {} : { archivedAt: null }), ...(productId.data ? { id: productId.data } : {}), ...(search.data ? { OR: [{ name: { contains: search.data, mode: 'insensitive' as const } }, { sku: { contains: search.data, mode: 'insensitive' as const } }] } : {}) };
+    const [products, total, settings, categoryMargins] = await Promise.all([
+      prisma.product.findMany({ where, select: { id: true, sku: true, name: true, description: true, category: true, pieceBrand: true, images: true, status: true, listPrice: true, pricingMode: true, marginPercent: true, vatRate: true, directStock: true, directStockReserved: true, directStockDamaged: true, archivedAt: true, _count: { select: { supplierOffers: true } }, supplierOffers: { orderBy: { createdAt: 'asc' }, select: { purchasePrice: true, status: true, archivedAt: true, supplier: { select: { id: true, companyName: true, firstName: true, lastName: true, email: true, status: true } } } } }, orderBy: { name: 'asc' }, skip: (page.data - 1) * pageSize.data, take: pageSize.data }),
+      prisma.product.count({ where }),
       prisma.companySettings.findUnique({ where: { id: 'default' }, select: { defaultMarginPercent: true } }),
       prisma.categoryMargin.findMany({ select: { category: true, marginPercent: true } }),
     ]);
@@ -1147,7 +1152,7 @@ app.get('/api/admin/products', requireAuth, requireAdmin, async (req, res, next)
       const activeApprovedOffers = supplierOffers.filter((offer) => offer.status === 'APPROVED' && !offer.archivedAt && offer.supplier?.status === 'ACTIVE');
       const lowestSupplierCost = activeApprovedOffers.sort((a, b) => Number(a.purchasePrice) - Number(b.purchasePrice))[0]?.purchasePrice ?? null;
       return { ...product, availableQuantity: _count.supplierOffers > 0 ? null : Math.max(0, product.directStock - product.directStockReserved - product.directStockDamaged), hasPartnerOffer: _count.supplierOffers > 0, partnerSuppliers, lowestSupplierCost, effectiveMarginPercent: product.marginPercent !== null ? Number(product.marginPercent) : (margins.get(normalizeCategory(product.category)) ?? Number(settings?.defaultMarginPercent ?? 0)) };
-    }) });
+    }), pagination: { page: page.data, pageSize: pageSize.data, total, totalPages: Math.max(1, Math.ceil(total / pageSize.data)) } });
   } catch (error) { next(error); }
 });
 
