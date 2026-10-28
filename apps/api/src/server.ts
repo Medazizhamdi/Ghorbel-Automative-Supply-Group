@@ -1569,14 +1569,22 @@ const manualFitmentSchema = z.object({
 type ManualFitment = z.infer<typeof manualFitmentSchema>;
 const vehicleStatuses: DataStatus[] = [DataStatus.VERIFIED, DataStatus.CONTRIBUTED];
 const nextVehicleStatus = (current: DataStatus, requested: DataStatus) => current === DataStatus.VERIFIED || requested === DataStatus.VERIFIED ? DataStatus.VERIFIED : requested;
+const canonicalVehicleModelName = (makeName: string, modelName: string) => {
+  const modelSlug = slugify(modelName);
+  if (slugify(makeName) === 'bmw') {
+    const bmwSeries = modelSlug.match(/^serie-([1-8])$/);
+    if (bmwSeries) return `${bmwSeries[1]} Series`;
+  }
+  return modelName.trim();
+};
 const upsertVehicleTaxonomy = async (tx: Prisma.TransactionClient, input: ManualFitment, status: DataStatus, source: string, sourceReference?: string) => {
-  const makeSlug = slugify(input.makeName); const modelSlug = slugify(input.modelName);
+  const makeSlug = slugify(input.makeName); const modelName = canonicalVehicleModelName(input.makeName, input.modelName); const modelSlug = slugify(modelName);
   let make = await tx.vehicleMake.findUnique({ where: { slug: makeSlug } });
   if (!make) make = await tx.vehicleMake.create({ data: { name: input.makeName, slug: makeSlug, status, source, sourceReference } });
   else make = await tx.vehicleMake.update({ where: { id: make.id }, data: { name: make.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.makeName, status: nextVehicleStatus(make.status, status), ...(make.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? {} : { source, sourceReference }) } });
   let model = await tx.vehicleModel.findUnique({ where: { makeId_slug: { makeId: make.id, slug: modelSlug } } });
-  if (!model) model = await tx.vehicleModel.create({ data: { makeId: make.id, name: input.modelName, slug: modelSlug, category: input.vehicleCategory || 'Voiture particulière', status, source, sourceReference } });
-  else model = await tx.vehicleModel.update({ where: { id: model.id }, data: { name: model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.modelName, category: model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.vehicleCategory || model.category, status: nextVehicleStatus(model.status, status), ...(model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? {} : { source, sourceReference }) } });
+  if (!model) model = await tx.vehicleModel.create({ data: { makeId: make.id, name: modelName, slug: modelSlug, category: input.vehicleCategory || 'Voiture particulière', status, source, sourceReference } });
+  else model = await tx.vehicleModel.update({ where: { id: model.id }, data: { name: model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : modelName, category: model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.vehicleCategory || model.category, status: nextVehicleStatus(model.status, status), ...(model.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? {} : { source, sourceReference }) } });
   const yearTo = input.yearTo ?? null;
   let generation = await tx.vehicleGeneration.findFirst({ where: { modelId: model.id, name: input.generationName, yearFrom: input.yearFrom, yearTo } });
   if (!generation) generation = await tx.vehicleGeneration.create({ data: { modelId: model.id, name: input.generationName, yearFrom: input.yearFrom, yearTo, status, source, sourceReference } });
@@ -3313,10 +3321,10 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
           let generationId: string | undefined; let engineId: string | undefined; let variantId: string | undefined;
           if (row.make && row.model && row.generation && row.yearFrom) {
             const dataStatus = row.verified ? DataStatus.VERIFIED : DataStatus.CONTRIBUTED;
-            const makeSlug = slugify(row.make); const modelSlug = slugify(row.model);
+            const makeSlug = slugify(row.make); const modelName = canonicalVehicleModelName(row.make, row.model); const modelSlug = slugify(modelName);
             const make = await tx.vehicleMake.upsert({ where: { slug: makeSlug }, update: { name: row.make, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { name: row.make, slug: makeSlug, status: dataStatus } });
             if (!row.verified && make.status === DataStatus.DEMONSTRATION) await tx.vehicleMake.update({ where: { id: make.id }, data: { status: DataStatus.CONTRIBUTED } });
-            const model = await tx.vehicleModel.upsert({ where: { makeId_slug: { makeId: make.id, slug: modelSlug } }, update: { name: row.model, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { makeId: make.id, name: row.model, slug: modelSlug, status: dataStatus } });
+            const model = await tx.vehicleModel.upsert({ where: { makeId_slug: { makeId: make.id, slug: modelSlug } }, update: { name: modelName, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { makeId: make.id, name: modelName, slug: modelSlug, status: dataStatus } });
             if (!row.verified && model.status === DataStatus.DEMONSTRATION) await tx.vehicleModel.update({ where: { id: model.id }, data: { status: DataStatus.CONTRIBUTED } });
             let generation = await tx.vehicleGeneration.findFirst({ where: { modelId: model.id, name: row.generation, yearFrom: row.yearFrom, yearTo: row.yearTo ?? null } });
             if (!generation) generation = await tx.vehicleGeneration.create({ data: { modelId: model.id, name: row.generation, yearFrom: row.yearFrom, yearTo: row.yearTo, status: dataStatus } });
