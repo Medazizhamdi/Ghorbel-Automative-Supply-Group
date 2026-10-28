@@ -3220,7 +3220,6 @@ type VehicleCsvRow = {
 const parseVehicleCatalogCsv = (input: string): VehicleCsvRow[] => {
   const records = parseCsv(input, detectCsvDelimiter(input));
   if (records.length < 2) throw new Error('Le CSV doit contenir un en-tête et au moins un véhicule.');
-  if (records.length - 1 > MAX_CATALOG_IMPORT_ROWS) throw new Error(`Un import est limité à ${MAX_CATALOG_IMPORT_ROWS} véhicules.`);
   const headers = records[0].map(headerName);
   if (new Set(headers).size !== headers.length) throw new Error('Le fichier contient des colonnes en double.');
   for (const required of ['make', 'model', 'generation', 'yearfrom']) if (!headers.includes(required)) throw new Error(`La colonne ${required} est obligatoire.`);
