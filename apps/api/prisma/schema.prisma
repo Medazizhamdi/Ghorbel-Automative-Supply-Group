@@ -798,7 +798,7 @@ model VehicleCompatibility {
   yearTo          Int?
   source          String
   sourceReference String?
-  verifiedAt      DateTime
+  verifiedAt      DateTime?
   createdAt       DateTime          @default(now())
 
   @@unique([productId, generationId, engineId, yearFrom, yearTo])

@@ -3337,10 +3337,16 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
           const now = row.verified ? new Date() : null;
           const normalizedReference = row.reference ? normalizeReference(row.reference) : undefined;
           if (row.reference && normalizedReference) await tx.productReference.upsert({ where: { normalized_productId: { normalized: normalizedReference, productId: product.id } }, update: { value: row.reference, type: row.referenceType, source: row.source, verifiedAt: row.verified ? now : undefined }, create: { productId: product.id, value: row.reference, normalized: normalizedReference, type: row.referenceType, source: row.source, verifiedAt: now } });
-          if (row.verified && generationId && row.yearFrom && row.source) {
+          if (generationId && row.yearFrom) {
             const existing = await tx.vehicleCompatibility.findFirst({ where: { productId: product.id, generationId, engineId: engineId ?? null, variantId: variantId ?? null, yearFrom: row.yearFrom, yearTo: row.yearTo ?? null } });
-            if (existing) await tx.vehicleCompatibility.update({ where: { id: existing.id }, data: { source: row.source, sourceReference: row.sourceReference, verifiedAt: new Date() } });
-            else await tx.vehicleCompatibility.create({ data: { productId: product.id, generationId, engineId, variantId, yearFrom: row.yearFrom, yearTo: row.yearTo, source: row.source, sourceReference: row.sourceReference, verifiedAt: new Date() } });
+            if (row.verified && row.source) {
+              if (existing) await tx.vehicleCompatibility.update({ where: { id: existing.id }, data: { source: row.source, sourceReference: row.sourceReference, verifiedAt: new Date() } });
+              else await tx.vehicleCompatibility.create({ data: { productId: product.id, generationId, engineId, variantId, yearFrom: row.yearFrom, yearTo: row.yearTo, source: row.source, sourceReference: row.sourceReference, verifiedAt: new Date() } });
+            } else if (!existing) {
+              await tx.vehicleCompatibility.create({ data: { productId: product.id, generationId, engineId, variantId, yearFrom: row.yearFrom, yearTo: row.yearTo, source: row.source || 'Import CSV — compatibilité à vérifier', sourceReference: row.sourceReference, verifiedAt: null } });
+            } else if (!existing.verifiedAt) {
+              await tx.vehicleCompatibility.update({ where: { id: existing.id }, data: { source: row.source || 'Import CSV — compatibilité à vérifier', sourceReference: row.sourceReference, verifiedAt: null } });
+            }
           }
         });
         acceptedRows += 1;
@@ -3610,8 +3616,8 @@ app.get('/api/catalog/products/:id', optionalAuth, async (req: AuthenticatedRequ
       where: { id: productId, archivedAt: null, OR: [{ status: DataStatus.VERIFIED, supplierOffers: { none: {} } }, { supplierOffers: { some: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } } } }] },
       include: {
         references: { where: { OR: [{ verifiedAt: { not: null } }, { source: 'soumis par le partenaire', product: { supplierOffers: { some: { status: 'APPROVED', archivedAt: null, supplier: { status: 'ACTIVE' } } } } }] } },
-        compatibilities: { where: { generation: { status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } } }, select: {
-          yearFrom: true, yearTo: true,
+        compatibilities: { select: {
+          yearFrom: true, yearTo: true, verifiedAt: true,
           source: true,
           generation: { select: { name: true, model: { select: { name: true, make: { select: { name: true } } } } } },
           engine: { select: { name: true, engineCode: true, fuel: true, displacementCc: true, powerKw: true } },
