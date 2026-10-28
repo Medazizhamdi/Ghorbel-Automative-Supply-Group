@@ -1569,16 +1569,24 @@ const manualFitmentSchema = z.object({
 type ManualFitment = z.infer<typeof manualFitmentSchema>;
 const vehicleStatuses: DataStatus[] = [DataStatus.VERIFIED, DataStatus.CONTRIBUTED];
 const nextVehicleStatus = (current: DataStatus, requested: DataStatus) => current === DataStatus.VERIFIED || requested === DataStatus.VERIFIED ? DataStatus.VERIFIED : requested;
-const canonicalVehicleModelName = (makeName: string, modelName: string) => {
-  const modelSlug = slugify(modelName);
-  if (slugify(makeName) === 'bmw') {
-    const bmwSeries = modelSlug.match(/^serie-([1-8])$/);
-    if (bmwSeries) return `${bmwSeries[1]} Series`;
-  }
+const canonicalVehicleModelSlug = (modelName: string) => {
+  const slug = slugify(modelName);
+  const series = slug.match(/^(?:serie|series)-(\d+)$/);
+  if (series) return `${series[1]}-series`;
+  const className = slug.match(/^(?:classe|class)-([a-z])$/);
+  if (className) return `${className[1]}-class`;
+  return slug;
+};
+const canonicalVehicleModelName = (modelName: string) => {
+  const modelSlug = canonicalVehicleModelSlug(modelName);
+  const series = modelSlug.match(/^(\d+)-series$/);
+  if (series) return `${series[1]} Series`;
+  const className = modelSlug.match(/^([a-z])-class$/);
+  if (className) return `${className[1].toUpperCase()}-Class`;
   return modelName.trim();
 };
 const upsertVehicleTaxonomy = async (tx: Prisma.TransactionClient, input: ManualFitment, status: DataStatus, source: string, sourceReference?: string) => {
-  const makeSlug = slugify(input.makeName); const modelName = canonicalVehicleModelName(input.makeName, input.modelName); const modelSlug = slugify(modelName);
+  const makeSlug = slugify(input.makeName); const modelName = canonicalVehicleModelName(input.modelName); const modelSlug = canonicalVehicleModelSlug(modelName);
   let make = await tx.vehicleMake.findUnique({ where: { slug: makeSlug } });
   if (!make) make = await tx.vehicleMake.create({ data: { name: input.makeName, slug: makeSlug, status, source, sourceReference } });
   else make = await tx.vehicleMake.update({ where: { id: make.id }, data: { name: make.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? undefined : input.makeName, status: nextVehicleStatus(make.status, status), ...(make.status === DataStatus.VERIFIED && status !== DataStatus.VERIFIED ? {} : { source, sourceReference }) } });
@@ -3321,7 +3329,7 @@ app.post('/api/admin/catalog/imports/:id/commit', requireAuth, requireAdmin, asy
           let generationId: string | undefined; let engineId: string | undefined; let variantId: string | undefined;
           if (row.make && row.model && row.generation && row.yearFrom) {
             const dataStatus = row.verified ? DataStatus.VERIFIED : DataStatus.CONTRIBUTED;
-            const makeSlug = slugify(row.make); const modelName = canonicalVehicleModelName(row.make, row.model); const modelSlug = slugify(modelName);
+            const makeSlug = slugify(row.make); const modelName = canonicalVehicleModelName(row.model); const modelSlug = canonicalVehicleModelSlug(modelName);
             const make = await tx.vehicleMake.upsert({ where: { slug: makeSlug }, update: { name: row.make, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { name: row.make, slug: makeSlug, status: dataStatus } });
             if (!row.verified && make.status === DataStatus.DEMONSTRATION) await tx.vehicleMake.update({ where: { id: make.id }, data: { status: DataStatus.CONTRIBUTED } });
             const model = await tx.vehicleModel.upsert({ where: { makeId_slug: { makeId: make.id, slug: modelSlug } }, update: { name: modelName, status: row.verified ? DataStatus.VERIFIED : undefined }, create: { makeId: make.id, name: modelName, slug: modelSlug, status: dataStatus } });
