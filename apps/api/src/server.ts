@@ -1585,6 +1585,21 @@ const canonicalVehicleModelName = (modelName: string) => {
   if (className) return `${className[1].toUpperCase()}-Class`;
   return modelName.trim();
 };
+const vehicleModelSlugAliases = (modelName: string) => {
+  const canonicalSlug = canonicalVehicleModelSlug(modelName);
+  const aliases = new Set([slugify(modelName), canonicalSlug]);
+  const series = canonicalSlug.match(/^(\d+)-series$/);
+  if (series) {
+    aliases.add(`serie-${series[1]}`);
+    aliases.add(`series-${series[1]}`);
+  }
+  const className = canonicalSlug.match(/^([a-z])-class$/);
+  if (className) {
+    aliases.add(`classe-${className[1]}`);
+    aliases.add(`class-${className[1]}`);
+  }
+  return [...aliases];
+};
 const upsertVehicleTaxonomy = async (tx: Prisma.TransactionClient, input: ManualFitment, status: DataStatus, source: string, sourceReference?: string) => {
   const makeSlug = slugify(input.makeName); const modelName = canonicalVehicleModelName(input.modelName); const modelSlug = canonicalVehicleModelSlug(modelName);
   let make = await tx.vehicleMake.findUnique({ where: { slug: makeSlug } });
@@ -3731,6 +3746,17 @@ app.get('/api/catalog/search', optionalAuth, async (req: AuthenticatedRequest, r
   try {
     const normalizedRef = reference ? normalizeReference(reference) : undefined;
     const normalizedQueryRef = q ? normalizeReference(q) : undefined;
+    let matchingModelIds = modelId ? [modelId] : undefined;
+    if (modelId) {
+      const selectedModel = await prisma.vehicleModel.findUnique({ where: { id: modelId }, select: { makeId: true, name: true } });
+      if (selectedModel) {
+        const matchingModels = await prisma.vehicleModel.findMany({
+          where: { makeId: selectedModel.makeId, slug: { in: vehicleModelSlugAliases(selectedModel.name) }, status: { in: vehicleStatuses } },
+          select: { id: true },
+        });
+        matchingModelIds = [...new Set([modelId, ...matchingModels.map((model) => model.id)])];
+      }
+    }
     const compatibilityWhere = {
       ...(generationId ? { generationId } : {}), ...(engineId ? { engineId } : {}), ...(variantId ? { variantId } : {}),
       ...(year ? { yearFrom: { lte: year } } : {}),
@@ -3738,7 +3764,7 @@ app.get('/api/catalog/search', optionalAuth, async (req: AuthenticatedRequest, r
         status: { in: vehicleStatuses },
         model: {
           status: { in: vehicleStatuses },
-          ...(modelId ? { id: modelId } : {}),
+          ...(matchingModelIds ? { id: { in: matchingModelIds } } : {}),
           make: { status: { in: vehicleStatuses }, ...(makeId ? { id: makeId } : {}) },
         },
       },
