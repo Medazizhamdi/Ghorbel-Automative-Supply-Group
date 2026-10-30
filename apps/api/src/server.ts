@@ -1600,6 +1600,64 @@ const vehicleModelSlugAliases = (modelName: string) => {
   }
   return [...aliases];
 };
+const canonicalVehicleGenerationSlug = (generationName: string) => slugify(generationName)
+  .replace(/(?:^|-)serie-(\d+)(?=-|$)/g, (_match, number: string) => `-${number}-series`)
+  .replace(/(?:^|-)series-(\d+)(?=-|$)/g, (_match, number: string) => `-${number}-series`)
+  .replace(/(?:^|-)classe-([a-z])(?=-|$)/g, (_match, letter: string) => `-${letter}-class`)
+  .replace(/(?:^|-)class-([a-z])(?=-|$)/g, (_match, letter: string) => `-${letter}-class`)
+  .replace(/^-/, '');
+const canonicalVehicleGenerationName = (generationName: string) => generationName.trim()
+  .replace(/\bSérie\s+(\d+)\b/gi, '$1 Series')
+  .replace(/\bSeries\s+(\d+)\b/gi, '$1 Series')
+  .replace(/\bClasse\s+([a-z])\b/gi, (_match, letter: string) => `${letter.toUpperCase()}-Class`)
+  .replace(/\bClass\s+([a-z])\b/gi, (_match, letter: string) => `${letter.toUpperCase()}-Class`);
+const equivalentVehicleModelIds = async (modelId: string) => {
+  const selected = await prisma.vehicleModel.findUnique({ where: { id: modelId }, select: { makeId: true, name: true } });
+  if (!selected) return [modelId];
+  const models = await prisma.vehicleModel.findMany({
+    where: { makeId: selected.makeId, slug: { in: vehicleModelSlugAliases(selected.name) }, status: { in: vehicleStatuses } },
+    select: { id: true },
+  });
+  return [...new Set([modelId, ...models.map((model) => model.id)])];
+};
+const equivalentVehicleGenerationIds = async (generationId: string, modelIds?: string[]) => {
+  const selected = await prisma.vehicleGeneration.findUnique({
+    where: { id: generationId },
+    select: { id: true, name: true, modelId: true, model: { select: { makeId: true, name: true } } },
+  });
+  if (!selected) return [generationId];
+  const relatedModelIds = modelIds ?? await equivalentVehicleModelIds(selected.modelId);
+  const candidates = await prisma.vehicleGeneration.findMany({
+    where: { modelId: { in: relatedModelIds }, status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } },
+    select: { id: true, name: true },
+  });
+  const key = canonicalVehicleGenerationSlug(selected.name);
+  return [...new Set([generationId, ...candidates.filter((item) => canonicalVehicleGenerationSlug(item.name) === key).map((item) => item.id)])];
+};
+const equivalentVehicleEngineIds = async (engineId: string, generationIds: string[]) => {
+  const selected = await prisma.engine.findUnique({ where: { id: engineId }, select: { name: true, engineCode: true, fuel: true, displacementCc: true, powerKw: true } });
+  if (!selected) return [engineId];
+  const candidates = await prisma.engine.findMany({ where: { generationId: { in: generationIds }, status: { in: vehicleStatuses } }, select: { id: true, name: true, engineCode: true, fuel: true, displacementCc: true, powerKw: true } });
+  const key = selected.engineCode?.trim().toLocaleLowerCase('fr-TN')
+    ? `code:${selected.engineCode.trim().toLocaleLowerCase('fr-TN')}`
+    : `spec:${slugify(selected.name)}:${slugify(selected.fuel || '')}:${selected.displacementCc ?? ''}:${selected.powerKw ?? ''}`;
+  return [...new Set([engineId, ...candidates.filter((item) => {
+    const candidateKey = item.engineCode?.trim().toLocaleLowerCase('fr-TN')
+      ? `code:${item.engineCode.trim().toLocaleLowerCase('fr-TN')}`
+      : `spec:${slugify(item.name)}:${slugify(item.fuel || '')}:${item.displacementCc ?? ''}:${item.powerKw ?? ''}`;
+    return candidateKey === key;
+  }).map((item) => item.id)])];
+};
+const equivalentVehicleVariantIds = async (variantId: string, generationIds: string[], engineIds?: string[]) => {
+  const selected = await prisma.vehicleVariant.findUnique({ where: { id: variantId }, select: { name: true, bodyStyle: true, transmission: true, drivetrain: true } });
+  if (!selected) return [variantId];
+  const candidates = await prisma.vehicleVariant.findMany({
+    where: { generationId: { in: generationIds }, status: { in: vehicleStatuses }, ...(engineIds ? { OR: [{ engineId: { in: engineIds } }, { engineId: null }] } : {}) },
+    select: { id: true, name: true, bodyStyle: true, transmission: true, drivetrain: true },
+  });
+  const key = [selected.name, selected.bodyStyle, selected.transmission, selected.drivetrain].map((value) => slugify(value || '')).join('|');
+  return [...new Set([variantId, ...candidates.filter((item) => [item.name, item.bodyStyle, item.transmission, item.drivetrain].map((value) => slugify(value || '')).join('|') === key).map((item) => item.id)])];
+};
 const upsertVehicleTaxonomy = async (tx: Prisma.TransactionClient, input: ManualFitment, status: DataStatus, source: string, sourceReference?: string) => {
   const makeSlug = slugify(input.makeName); const modelName = canonicalVehicleModelName(input.modelName); const modelSlug = canonicalVehicleModelSlug(modelName);
   let make = await tx.vehicleMake.findUnique({ where: { slug: makeSlug } });
@@ -3621,9 +3679,17 @@ app.get('/api/catalog/vehicles/models', async (req, res, next) => {
   try {
     const models = await prisma.vehicleModel.findMany({
       where: { makeId: makeId.data, status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } },
-      select: { id: true, name: true, category: true }, orderBy: { name: 'asc' },
+      select: { id: true, name: true, category: true, slug: true }, orderBy: { name: 'asc' },
     });
-    res.json({ data: models });
+    const groups = new Map<string, { id: string; name: string; category: string | null; preferred: boolean }>();
+    for (const model of models) {
+      const key = canonicalVehicleModelSlug(model.name);
+      const preferred = model.slug === key;
+      const current = groups.get(key);
+      if (!current) groups.set(key, { id: model.id, name: canonicalVehicleModelName(model.name), category: model.category, preferred });
+      else if (preferred && !current.preferred) groups.set(key, { id: model.id, name: canonicalVehicleModelName(model.name), category: model.category, preferred });
+    }
+    res.json({ data: [...groups.values()].map(({ preferred: _preferred, ...model }) => model).sort((a, b) => a.name.localeCompare(b.name)) });
   } catch (error) { next(error); }
 });
 
@@ -3631,11 +3697,27 @@ app.get('/api/catalog/vehicles/generations', async (req, res, next) => {
   const modelId = uuid.safeParse(req.query.modelId);
   if (!modelId.success) return res.status(400).json({ error: 'modelId UUID requis.' });
   try {
+    const modelIds = await equivalentVehicleModelIds(modelId.data);
     const generations = await prisma.vehicleGeneration.findMany({
-      where: { modelId: modelId.data, status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } },
-      select: { id: true, name: true, yearFrom: true, yearTo: true }, orderBy: { yearFrom: 'desc' },
+      where: { modelId: { in: modelIds }, status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } },
+      select: { id: true, modelId: true, name: true, yearFrom: true, yearTo: true }, orderBy: [{ yearFrom: 'desc' }, { name: 'asc' }],
     });
-    res.json({ data: generations });
+    const groups = new Map<string, { id: string; name: string; yearFrom: number; yearTo: number | null; years: Set<number>; preferred: boolean }>();
+    for (const generation of generations) {
+      const key = canonicalVehicleGenerationSlug(generation.name);
+      let group = groups.get(key);
+      if (!group) {
+        group = { id: generation.id, name: canonicalVehicleGenerationName(generation.name), yearFrom: generation.yearFrom, yearTo: generation.yearTo, years: new Set(), preferred: generation.modelId === modelId.data };
+        groups.set(key, group);
+      } else {
+        group.yearFrom = Math.min(group.yearFrom, generation.yearFrom);
+        group.yearTo = group.yearTo === null || generation.yearTo === null ? null : Math.max(group.yearTo, generation.yearTo);
+        if (generation.modelId === modelId.data && !group.preferred) { group.id = generation.id; group.preferred = true; }
+      }
+      const end = generation.yearTo ?? new Date().getFullYear();
+      if (end - generation.yearFrom <= 100) for (let year = generation.yearFrom; year <= end; year += 1) group.years.add(year);
+    }
+    res.json({ data: [...groups.values()].map(({ years, ...generation }) => ({ ...generation, years: [...years].sort((a, b) => b - a) })).sort((a, b) => b.yearFrom - a.yearFrom || a.name.localeCompare(b.name)) });
   } catch (error) { next(error); }
 });
 
@@ -3643,12 +3725,18 @@ app.get('/api/catalog/vehicles/engines', async (req, res, next) => {
   const generationId = uuid.safeParse(req.query.generationId);
   if (!generationId.success) return res.status(400).json({ error: 'generationId UUID requis.' });
   try {
+    const generationIds = await equivalentVehicleGenerationIds(generationId.data);
     const engines = await prisma.engine.findMany({
-      where: { generationId: generationId.data, status: { in: vehicleStatuses }, generation: { status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } } },
+      where: { generationId: { in: generationIds }, status: { in: vehicleStatuses }, generation: { status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } } },
       select: { id: true, name: true, fuel: true, displacementCc: true, powerKw: true, engineCode: true },
       orderBy: { name: 'asc' },
     });
-    res.json({ data: engines });
+    const groups = new Map<string, typeof engines[number]>();
+    for (const engine of engines) {
+      const key = engine.engineCode?.trim().toLocaleLowerCase('fr-TN') || `${slugify(engine.name)}|${slugify(engine.fuel || '')}|${engine.displacementCc ?? ''}|${engine.powerKw ?? ''}`;
+      if (!groups.has(key)) groups.set(key, engine);
+    }
+    res.json({ data: [...groups.values()] });
   } catch (error) { next(error); }
 });
 
@@ -3658,16 +3746,23 @@ app.get('/api/catalog/vehicles/variants', async (req, res, next) => {
   const engineId = req.query.engineId === undefined ? undefined : uuid.safeParse(req.query.engineId);
   if (engineId && !engineId.success) return res.status(400).json({ error: 'engineId UUID invalide.' });
   try {
+    const generationIds = await equivalentVehicleGenerationIds(generationId.data);
+    const engineIds = engineId?.success ? await equivalentVehicleEngineIds(engineId.data, generationIds) : undefined;
     const variants = await prisma.vehicleVariant.findMany({
       where: {
-        generationId: generationId.data, status: { in: vehicleStatuses },
+        generationId: { in: generationIds }, status: { in: vehicleStatuses },
         generation: { status: { in: vehicleStatuses }, model: { status: { in: vehicleStatuses }, make: { status: { in: vehicleStatuses } } } },
-        ...(engineId?.success ? { OR: [{ engineId: engineId.data }, { engineId: null }] } : {}),
+        ...(engineIds ? { OR: [{ engineId: { in: engineIds } }, { engineId: null }] } : {}),
       },
       select: { id: true, name: true, bodyStyle: true, transmission: true, drivetrain: true, engineId: true },
       orderBy: { name: 'asc' },
     });
-    res.json({ data: variants });
+    const groups = new Map<string, typeof variants[number]>();
+    for (const variant of variants) {
+      const key = [variant.name, variant.bodyStyle, variant.transmission, variant.drivetrain].map((value) => slugify(value || '')).join('|');
+      if (!groups.has(key)) groups.set(key, variant);
+    }
+    res.json({ data: [...groups.values()] });
   } catch (error) { next(error); }
 });
 
@@ -3746,19 +3841,14 @@ app.get('/api/catalog/search', optionalAuth, async (req: AuthenticatedRequest, r
   try {
     const normalizedRef = reference ? normalizeReference(reference) : undefined;
     const normalizedQueryRef = q ? normalizeReference(q) : undefined;
-    let matchingModelIds = modelId ? [modelId] : undefined;
-    if (modelId) {
-      const selectedModel = await prisma.vehicleModel.findUnique({ where: { id: modelId }, select: { makeId: true, name: true } });
-      if (selectedModel) {
-        const matchingModels = await prisma.vehicleModel.findMany({
-          where: { makeId: selectedModel.makeId, slug: { in: vehicleModelSlugAliases(selectedModel.name) }, status: { in: vehicleStatuses } },
-          select: { id: true },
-        });
-        matchingModelIds = [...new Set([modelId, ...matchingModels.map((model) => model.id)])];
-      }
-    }
+    const matchingModelIds = modelId ? await equivalentVehicleModelIds(modelId) : undefined;
+    const matchingGenerationIds = generationId ? await equivalentVehicleGenerationIds(generationId, matchingModelIds) : undefined;
+    const matchingEngineIds = engineId ? await equivalentVehicleEngineIds(engineId, matchingGenerationIds ?? []) : undefined;
+    const matchingVariantIds = variantId ? await equivalentVehicleVariantIds(variantId, matchingGenerationIds ?? [], matchingEngineIds) : undefined;
     const compatibilityWhere = {
-      ...(generationId ? { generationId } : {}), ...(engineId ? { engineId } : {}), ...(variantId ? { variantId } : {}),
+      ...(matchingGenerationIds ? { generationId: { in: matchingGenerationIds } } : {}),
+      ...(matchingEngineIds ? { engineId: { in: matchingEngineIds } } : {}),
+      ...(matchingVariantIds ? { variantId: { in: matchingVariantIds } } : {}),
       ...(year ? { yearFrom: { lte: year } } : {}),
       generation: {
         status: { in: vehicleStatuses },
@@ -3768,8 +3858,8 @@ app.get('/api/catalog/search', optionalAuth, async (req: AuthenticatedRequest, r
           make: { status: { in: vehicleStatuses }, ...(makeId ? { id: makeId } : {}) },
         },
       },
-      ...(engineId ? { engine: { status: { in: vehicleStatuses } } } : {}),
-      ...(variantId ? { variant: { status: { in: vehicleStatuses } } } : {}),
+      ...(matchingEngineIds ? { engine: { id: { in: matchingEngineIds }, status: { in: vehicleStatuses } } } : {}),
+      ...(matchingVariantIds ? { variant: { id: { in: matchingVariantIds }, status: { in: vehicleStatuses } } } : {}),
       AND: [
         ...(year ? [{ OR: [{ yearTo: null }, { yearTo: { gte: year } }] }] : []),
         { OR: [{ engineId: null }, { engine: { status: { in: vehicleStatuses } } }] },
